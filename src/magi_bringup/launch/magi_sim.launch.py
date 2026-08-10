@@ -157,15 +157,31 @@ def _controllers():
         {
             "start_posture": LaunchConfiguration("start_posture"),
             "balance": LaunchConfiguration("balance"),
+            "stance_controller": LaunchConfiguration("stance_controller"),
         }.items(),
     )
 
 
-def _teleop():
+def _teleop(context):
+    """Route teleop around or through the governor, whichever is running.
+
+    magi_stabilizer owns /wheel_controller/cmd_vel_unstamped, so teleop has to
+    hand it the twist on /cmd_vel instead. Any other stance controller leaves
+    that topic free and teleop drives the wheels directly. Getting this wrong
+    is silent -- two publishers on one topic, and the robot obeys whichever
+    message landed last -- so it is derived here rather than left to the caller.
+    """
+    stabilizing = (
+        LaunchConfiguration("balance").perform(context).lower() in ("true", "1")
+        and LaunchConfiguration("start_posture").perform(context).lower() in ("true", "1")
+        and LaunchConfiguration("stance_controller").perform(context).strip().lower()
+        == "stabilizer"
+    )
     return _include(
         "magi_control",
         "teleop.launch.py",
-        {}.items(),
+        {"cmd_topic": "/cmd_vel" if stabilizing
+         else "/wheel_controller/cmd_vel_unstamped"}.items(),
         condition=IfCondition(LaunchConfiguration("teleop")),
     )
 
@@ -243,7 +259,7 @@ def launch_setup(context, *args, **kwargs):
         # longer depends on these numbers.
         TimerAction(period=unpause_at + 4.0, actions=[_localization()]),
         TimerAction(period=max(delay("rviz"), unpause_at + 6.0),
-                    actions=[_rviz(), _teleop()]),
+                    actions=[_rviz(), _teleop(context)]),
     ]
 
 
@@ -306,8 +322,17 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "balance", default_value="true",
                 description=(
-                    "Run the closed-loop balance controller. false falls back "
+                    "Run a closed-loop stance controller. false falls back "
                     "to the fixed stance, for A/B comparison only."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "stance_controller", default_value="stabilizer",
+                choices=["stabilizer", "balance"],
+                description=(
+                    "Which closed-loop stance controller to run. 'stabilizer' "
+                    "also governs the command path; 'balance' is the original "
+                    "quasi-static one, kept for A/B."
                 ),
             ),
             DeclareLaunchArgument(

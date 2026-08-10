@@ -1,4 +1,4 @@
-"""Activate the MAGI Go2W controllers.
+"""Activate the MAGI Go2W controllers and the stance controller above them.
 
 The controller_manager lives inside the Gazebo process (created by the
 gz_ros2_control system plugin), so this launch file only runs spawners against
@@ -21,13 +21,30 @@ initialisation past that: leg_controller loaded first, requested its switch,
 and timed out ~1 s before the first physics tick arrived, leaving the robot on
 its belly with limp legs while the other three controllers came up fine. A
 generous timeout lets every switch simply wait for the unpause.
+
+CHOOSING THE STANCE CONTROLLER
+
+Exactly one node may write /leg_controller/joint_trajectory, so the three
+options are mutually exclusive:
+
+    balance:=false                      magi_posture -- one fixed stance, set
+                                        once and never touched again. The
+                                        baseline an A/B run is measured against.
+    stance_controller:=balance          magi_balance -- the original
+                                        quasi-static CoP controller.
+    stance_controller:=stabilizer       magi_stabilizer -- the dynamic tipover
+                        (default)       controller, which ALSO governs the
+                                        command path. See its module docstring.
+
+The last one is not a drop-in for the other two at the topic level: it owns the
+twist the wheel controller consumes, so teleop and navigation have to publish
+to /cmd_vel instead of straight to /wheel_controller/cmd_vel_unstamped. Callers
+get that routing from teleop.launch.py's `cmd_topic` argument.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
-from launch.substitutions import (AndSubstitution, LaunchConfiguration,
-                                  NotSubstitution, PathJoinSubstitution)
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -47,6 +64,12 @@ CONTROLLERS = [
     "wheel_controller",
 ]
 
+# stance_controller value -> (executable, config file or None)
+STANCE_NODES = {
+    "stabilizer": ("magi_stabilizer.py", "magi_stabilizer.yaml"),
+    "balance": ("magi_balance.py", "magi_balance.yaml"),
+}
+
 
 def spawner(controller):
     return Node(
@@ -65,6 +88,46 @@ def spawner(controller):
     )
 
 
+def _stance_node(context, *args, **kwargs):
+    """Pick the one node that drives the legs.
+
+    Resolved in Python rather than with nested IfConditions: three mutually
+    exclusive choices over two arguments is four nested substitutions and one
+    easy mistake, and a mistake here means either two nodes fighting over
+    /leg_controller/joint_trajectory or none driving it at all.
+    """
+    if LaunchConfiguration("start_posture").perform(context).lower() not in ("true", "1"):
+        return []
+
+    if LaunchConfiguration("balance").perform(context).lower() not in ("true", "1"):
+        return [Node(
+            package="magi_control",
+            executable="magi_posture.py",
+            name="magi_posture",
+            output="screen",
+            parameters=[{"use_sim_time": True}],
+        )]
+
+    choice = LaunchConfiguration("stance_controller").perform(context).strip().lower()
+    if choice not in STANCE_NODES:
+        raise RuntimeError(
+            f"stance_controller must be one of {sorted(STANCE_NODES)}, got '{choice}'")
+    executable, config = STANCE_NODES[choice]
+
+    return [Node(
+        package="magi_control",
+        executable=executable,
+        name=executable.removesuffix(".py"),
+        output="screen",
+        parameters=[
+            {"use_sim_time": True},
+            PathJoinSubstitution(
+                [FindPackageShare("magi_control"), "config", config]
+            ),
+        ],
+    )]
+
+
 def generate_launch_description():
     return LaunchDescription(
         [
@@ -77,44 +140,22 @@ def generate_launch_description():
                 "balance",
                 default_value="true",
                 description=(
-                    "Run the closed-loop balance controller. false falls back to "
-                    "magi_posture, which sets one fixed stance and never touches "
-                    "the legs again -- useful only as an A/B baseline."
+                    "Run a closed-loop stance controller. false falls back to "
+                    "magi_posture, which sets one fixed stance and never "
+                    "touches the legs again -- the A/B baseline."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "stance_controller",
+                default_value="stabilizer",
+                choices=sorted(STANCE_NODES),
+                description=(
+                    "Which closed-loop stance controller to run. 'stabilizer' "
+                    "adds command governing and needs teleop routed via "
+                    "/cmd_vel; 'balance' is the original, kept for A/B."
                 ),
             ),
             *[spawner(name) for name in CONTROLLERS],
-            # Exactly one of these may run: they both publish to
-            # /leg_controller/joint_trajectory, and two writers would fight.
-            Node(
-                package="magi_control",
-                executable="magi_balance.py",
-                name="magi_balance",
-                output="screen",
-                parameters=[
-                    {"use_sim_time": True},
-                    PathJoinSubstitution(
-                        [FindPackageShare("magi_control"), "config", "magi_balance.yaml"]
-                    ),
-                ],
-                condition=IfCondition(
-                    AndSubstitution(
-                        LaunchConfiguration("start_posture"),
-                        LaunchConfiguration("balance"),
-                    )
-                ),
-            ),
-            Node(
-                package="magi_control",
-                executable="magi_posture.py",
-                name="magi_posture",
-                output="screen",
-                parameters=[{"use_sim_time": True}],
-                condition=IfCondition(
-                    AndSubstitution(
-                        LaunchConfiguration("start_posture"),
-                        NotSubstitution(LaunchConfiguration("balance")),
-                    )
-                ),
-            ),
+            OpaqueFunction(function=_stance_node),
         ]
     )

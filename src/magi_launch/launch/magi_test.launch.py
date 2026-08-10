@@ -104,6 +104,7 @@ def generate_launch_description():
             "rviz_config": LaunchConfiguration("rviz_config"),
             "teleop": LaunchConfiguration("teleop"),
             "balance": LaunchConfiguration("balance"),
+            "stance_controller": LaunchConfiguration("stance_controller"),
             "localization": "true",
             "x": LaunchConfiguration("x"),
             "y": LaunchConfiguration("y"),
@@ -159,8 +160,17 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "balance", default_value="true",
                 description=(
-                    "Run the closed-loop balance controller. false falls back "
+                    "Run a closed-loop stance controller. false falls back "
                     "to the fixed stance, for A/B comparison only."
+                ),
+            ),
+            DeclareLaunchArgument(
+                "stance_controller", default_value="stabilizer",
+                choices=["stabilizer", "balance"],
+                description=(
+                    "Which closed-loop stance controller to run. 'stabilizer' "
+                    "is the dynamic tipover controller and also governs the "
+                    "command path; 'balance' is the original, kept for A/B."
                 ),
             ),
             DeclareLaunchArgument("x", default_value="4.0"),

@@ -45,7 +45,12 @@ from rclpy.node import Node
 from std_msgs.msg import Bool, Float64
 
 MODEL = "magi_go2w"
-CMD_TOPIC = "/wheel_controller/cmd_vel_unstamped"
+# Default through the stabilizer's governor. Publishing straight to
+# /wheel_controller/cmd_vel_unstamped while magi_stabilizer is running puts two
+# writers on one topic and measures neither configuration, so --cmd-topic is
+# how a baseline run bypasses it -- see --help.
+CMD_TOPIC = "/cmd_vel"
+DIRECT_TOPIC = "/wheel_controller/cmd_vel_unstamped"
 ROLLED = math.radians(50.0)      # past this the robot is not coming back
 
 
@@ -87,19 +92,24 @@ def reset_pose(world, xyz, settle):
 
 
 class Driver(Node):
-    def __init__(self):
+    def __init__(self, cmd_topic=CMD_TOPIC):
         super().__init__("magi_stability_test")
-        self.pub = self.create_publisher(Twist, CMD_TOPIC, 10)
+        self.pub = self.create_publisher(Twist, cmd_topic, 10)
         self.enable = self.create_publisher(Bool, "/magi/balance_enable", 10)
         self.msg = Twist()
         self.create_timer(0.02, lambda: self.pub.publish(self.msg))
 
         self.margins = []
         self.tracks = []
+        self.tips = []
         self.create_subscription(Float64, "/magi/stability_margin",
                                  lambda m: self.margins.append(m.data), 10)
         self.create_subscription(Float64, "/magi/stance_width",
                                  lambda m: self.tracks.append(m.data), 10)
+        # Only magi_stabilizer publishes this one; it stays empty under the
+        # older controllers, and the report drops the column when it is.
+        self.create_subscription(Float64, "/magi/tip_margin",
+                                 lambda m: self.tips.append(m.data), 10)
 
     def drive(self, lin, ang):
         m = Twist()
@@ -113,6 +123,7 @@ class Driver(Node):
 def one_run(node, lin, ang, duration):
     node.margins.clear()
     node.tracks.clear()
+    node.tips.clear()
 
     rolls, pitches = [], []
     x0, y0 = gz_pose()[:2]
@@ -146,6 +157,7 @@ def one_run(node, lin, ang, duration):
         "margin_mean": statistics.fmean(node.margins) if node.margins else float("nan"),
         "margin_min": min(node.margins) if node.margins else float("nan"),
         "track": statistics.fmean(node.tracks) if node.tracks else float("nan"),
+        "tip_min": math.degrees(min(node.tips)) if node.tips else float("nan"),
     }
 
 
@@ -162,7 +174,12 @@ def main():
     ap.add_argument("--settle", type=float, default=8.0,
                     help="seconds to let the stance recover after a reset")
     ap.add_argument("--no-balance", action="store_true",
-                    help="freeze the balance feedback: fixed stance, for A/B")
+                    help="freeze the stance feedback: fixed stance, for A/B")
+    ap.add_argument("--cmd-topic", default=CMD_TOPIC,
+                    help=(f"where to publish the twist (default {CMD_TOPIC}, "
+                          f"through the stabilizer's governor). Use "
+                          f"{DIRECT_TOPIC} to drive the wheels directly when "
+                          f"magi_stabilizer is not running."))
     args = ap.parse_args()
 
     speeds = [float(s) for s in args.speeds.split(",")]
@@ -171,7 +188,7 @@ def main():
         sys.exit("--reset-pose needs --world")
 
     rclpy.init()
-    node = Driver()
+    node = Driver(args.cmd_topic)
     threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()
     time.sleep(1.0)
 
@@ -183,7 +200,8 @@ def main():
     print(f"\n{mode}   turn {args.turn} rad/s, {args.duration:.0f} s per run, "
           f"{args.reps} reps\n")
     header = (f"{'speed':>6}{'result':>16}{'|roll|max':>11}{'roll rms':>10}"
-              f"{'|pitch|max':>11}{'dist':>8}{'margin':>9}{'min':>8}{'track':>8}")
+              f"{'|pitch|max':>11}{'dist':>8}{'margin':>9}{'min':>8}{'track':>8}"
+              f"{'tip min':>9}")
     print(header)
     print("-" * len(header))
 
@@ -201,7 +219,7 @@ def main():
                   f"{r['roll_max']:>11.1f}{r['roll_rms']:>10.1f}"
                   f"{r['pitch_max']:>11.1f}{r['distance']:>8.2f}"
                   f"{r['margin_mean']:>9.3f}{r['margin_min']:>8.3f}"
-                  f"{r['track']:>8.3f}")
+                  f"{r['track']:>8.3f}{r['tip_min']:>9.1f}")
         summary.append((speed, survived, args.reps, rows))
         print("-" * len(header))
 

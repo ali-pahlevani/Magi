@@ -59,7 +59,7 @@ rather than after a spell of TF errors. Turn either window off with
 |---|---|
 | `magi_description` | URDF/xacro, meshes, `ros2_control` interfaces, Gazebo tags, RViz config |
 | `magi_gazebo` | Offline Rubicon world + vendored model, flat test world, simulator launch |
-| `magi_control` | Controller YAML, spawners, balance/posture nodes, keyboard teleop |
+| `magi_control` | Controller YAML, spawners, stance/balance/posture nodes, keyboard teleop |
 | `magi_localization` | EKF + leg odometry + IMU conditioner; owns `odom -> base` |
 | `magi_bringup` | Simulation stack: world, robot, controllers, estimation |
 | `magi_launch` | Runnable configurations. Start here; SLAM and navigation land here too |
@@ -317,6 +317,60 @@ Each joint declares exactly **one** command interface. This is deliberate:
 `GazeboSimSystem::write()` is an if/else chain testing `VELOCITY` before
 `POSITION` before `EFFORT`, so a joint exposing several would silently ignore
 all but the first.
+
+### Stance control and the command governor
+
+Above the controllers sits one node that decides where the feet go.
+`magi_stabilizer` is the default; `magi_balance` (the original quasi-static CoP
+controller) and `magi_posture` (one fixed stance) are kept for A/B:
+
+```bash
+ros2 launch magi_launch magi_test.launch.py                            # stabilizer
+ros2 launch magi_launch magi_test.launch.py stance_controller:=balance # the old one
+ros2 launch magi_launch magi_test.launch.py balance:=false             # fixed stance
+```
+
+The stabilizer differs from `magi_balance` in one structural way: **it sits in
+the command path**. Teleop and navigation publish to `/cmd_vel`, and the node
+republishes to `/wheel_controller/cmd_vel_unstamped` after projecting the twist
+onto the set of twists the robot can currently survive. A steady turn at
+`(v, w)` needs `v*w` of lateral acceleration; how much is available is found by
+bisecting the measured stability margin, so the envelope shrinks by itself on a
+side slope, over a bump, and whenever a wheel unloads. Both components are
+scaled by the same factor, which preserves `v/w` — the robot takes the
+operator's arc more slowly rather than a different arc.
+
+Nothing else may publish to `/wheel_controller/cmd_vel_unstamped` while it is
+running. The governor stays silent until it receives its first `/cmd_vel`, so
+the direct-drive path still works for baseline runs.
+
+Stability is measured as a **force-angle margin**: the angle the net force may
+still rotate through before the robot goes over its worst support edge, taken
+against the effective gravity the accelerometer reports (which already contains
+centrifugal, braking and terrain terms). Unlike "is the CoP inside the
+polygon", it is defined when only two wheels are loaded — the moment that
+actually matters — and its units are degrees of remaining tilt.
+
+Measured on Rubicon, spawned and reset to (4.0, -0.5, 1.80), 8 s per run:
+
+| profile | `magi_balance` | `magi_stabilizer` |
+|---|---|---|
+| v 0.7 | 2/3 upright, roll 45° | **3/3**, roll 11° |
+| v 1.2 | 0/3 upright, roll 137° | **8/8**, roll 9° |
+| v 0.9, w 0.5 | 1/3 upright, roll 99° | **3/3**, roll 11° |
+| v 1.5, w 1.2 | 1/3 upright, roll 85° | **7/8**, roll 12° |
+| **total** | **4/12** | **21/22** |
+
+Standing still it is also quieter — body rate 0.005 rad/s rms against 0.017,
+with all four wheels loaded against 3.3. The governing costs 15–25% of the
+ground covered, which is what the runs finishing upright are worth.
+
+It is *not* a guarantee. There is no stepping, so a big enough terrain event
+still wins; 21/22 is not 22/22. See the module docstring in
+`magi_control/scripts/magi_stabilizer.py`, which also records the three
+measurements that shaped the design — why the accelerometer cannot be used raw
+as an attitude reference, why contacts have to be held briefly after they go
+light, and why splaying the stance helps even though it cambers the wheels.
 
 ### The legs are torque-controlled
 

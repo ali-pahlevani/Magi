@@ -1,0 +1,249 @@
+# Tuning for magi_stabilizer.py -- the dynamic tipover-prevention controller.
+#
+# WHAT THE ROBOT ACTUALLY HAS TO WORK WITH
+#
+# Computed from the leg IK and the URDF inertials, with the wheel contact taken
+# as the true contact of a cambered cylinder rather than "wheel centre minus a
+# radius" (splaying the hips leans the wheels, which moves the contact 19 mm
+# further out again at full splay -- free track the old node did not count):
+#
+#   stance                  half-track   h_com   tip angle   lateral accel
+#   nominal 0.40 / 0.380      0.1901    0.3111     31.4 deg     5.99 m/s^2
+#   old widen_max 0.070       0.2727    0.3124     41.1 deg     8.56 m/s^2
+#   widen_max 0.110 (here)    0.3192    0.3124     45.6 deg    10.02 m/s^2
+#   widen 0.110 + crouch      0.3249    0.2476     52.7 deg    12.87 m/s^2
+#
+# The last row needs 23 deg of hip against a 60 deg limit, so none of this is
+# near the mechanism's edge -- the old configuration simply did not ask for it.
+# Widening is the lever to lean on because it costs NO ground clearance;
+# crouching buys the last 7 deg but spends clearance, which on Rubicon has
+# already been measured to be the more expensive currency (see crouch_max).
+#
+# THE THREE TIME SCALES
+#
+#   command    the governor, 50 Hz. Refuses twists outside the measured
+#              envelope. Nothing else in the stack does this, and it is what
+#              makes commanded-motion rollovers essentially impossible.
+#   fast       body tilt through differential leg length, 100 Hz. Rejects
+#              terrain. Rate damping runs undelayed; only the P+I path is
+#              filtered.
+#   slow       stance width and ride height. Asymmetric: 0.60 m/s going wide,
+#              0.10 m/s coming back, because scrubbing the wheels is worth it
+#              instantly to avoid a rollover and not at all to look tidy.
+
+magi_stabilizer:
+  ros__parameters:
+    use_sim_time: true
+
+    rate: 100.0
+    # The dominant lag in the fast path. Each message supersedes the last, so
+    # the trajectory controller treats this as a first-order time constant
+    # rather than a deadline. 0.03 against the old node's 0.05 is most of the
+    # bandwidth recovered.
+    command_horizon: 0.03
+    controller: leg_controller
+
+    # The governor sits IN the command path. Teleop and navigation publish to
+    # cmd_in; the wheel controller listens to cmd_out. Nothing else may write
+    # cmd_out while this node is running.
+    cmd_in: /cmd_vel
+    cmd_out: /wheel_controller/cmd_vel_unstamped
+
+    ride_height: 0.40
+    stand_time: 2.5
+    startup_delay: 2.0
+    # The attitude loop fades in over this long rather than switching on. A step
+    # from no authority to full applies whatever error accumulated during the
+    # stand-up as one impulse, which on Rubicon unloaded two wheels by itself.
+    authority_ramp: 0.75
+
+    # --- attitude loop ---------------------------------------------------
+    # The reference is "body z along EFFECTIVE gravity", taken straight off the
+    # accelerometer. That single signal is the slope levelling and the
+    # cornering lean and the response to a terrain impulse, so there is no
+    # separate feed-forward term here and no v*w model to be wrong about.
+    #
+    # Gains are dimensionless: 1.0 would command the whole measured error as a
+    # body rotation in one cycle.
+    roll_kp: 0.75
+    roll_ki: 0.60
+    roll_kd: 0.09
+    pitch_kp: 0.55
+    pitch_ki: 0.50
+    pitch_kd: 0.10
+    tilt_i_max: 0.15
+    tilt_max: 0.35
+    # Low-pass on the P+I path ONLY. The old node filtered the summed PID
+    # output, which put 0.1 s of lag on the rate term -- the one term whose
+    # whole job is to arrest a divergent roll before it becomes one.
+    command_tau: 0.08
+    gyro_tau: 0.05
+    # The accelerometer is the reference sensor now, so its filter matters.
+    # Short enough to keep terrain impulses (a few Hz at most), long enough to
+    # reject the MEMS noise floor and the 0.05 m lever arm to the IMU mount.
+    # 0.20, not 0.06. Since the fast attitude path now runs off the quaternion,
+    # the accelerometer only feeds slow consumers -- the lean reference and the
+    # stability margin -- and both want it heavily filtered. At 0.06 every wheel
+    # crossing a Rubicon facet swung the measured gravity direction enough to
+    # make the margin look like it was collapsing.
+    accel_tau: 0.20
+    # The lean reference -- the inertial part of the measured gravity direction,
+    # i.e. what is left once the true attitude is taken out. It has to be SLOW.
+    # Fed to the loop unfiltered, an accelerometer reports the legs' own push on
+    # the body as tilt, the loop tilts further to "correct" it, and that pushes
+    # harder: measured on FLAT ground standing still, two wheels unloaded within
+    # a second and the robot was inverted a few seconds later. A real lean
+    # demand -- a corner, a slope, a sustained side force -- is slow.
+    lean_tau: 0.40
+    lean_max: 0.25
+    # Accelerometer bias estimation. At rest the inertial part of the measured
+    # gravity direction is zero by construction -- whatever the slope, a body at
+    # rest reads gravity and only gravity -- so anything left over is bias, and
+    # rest is exactly when it is observable. It has to come out: the URDF models
+    # 0.1 m/s^2 of bias_mean, which is 0.58 deg of phantom lean that the loop
+    # will hold the body at indefinitely. Measured standing on flat ground,
+    # before this existed: roll 0.77 / pitch 0.98 deg rms, against 0.04 / 0.06
+    # with the lean reference switched off altogether.
+    accel_bias_tau: 8.0
+    accel_bias_max: 0.05
+
+    # --- margin-driven CoM bias -------------------------------------------
+    # Below bias_margin the body leans directly AWAY from whichever support
+    # edge it is closest to going over, on top of the levelling loop. This is
+    # "keep the centre of gravity inside the triangle" in its most literal
+    # form -- it moves the CoM rather than waiting for the attitude error to
+    # grow enough to move it.
+    bias_margin: 0.30    # rad, 17 deg
+    bias_gain: 0.6
+    bias_max: 0.10       # rad, 5.7 deg of extra lean
+
+    # --- prediction --------------------------------------------------------
+    # Body rates integrated forward this far, and the margin re-evaluated
+    # there. A rollover is divergent: the static margin is still comfortable
+    # at the moment the outcome is already decided, so every consumer uses
+    # min(now, predicted).
+    predict_time: 0.12
+    # And CLAMPED. Body rates spike to 1-2 rad/s whenever a wheel crosses a
+    # facet; unclamped, a 0.2 s lookahead turns each spike into 17 deg of
+    # "predicted" rotation, so the margin reads as collapsing several times a
+    # second on terrain the robot is handling fine. Throttled to a crawl by its
+    # own jitter, it then rolled at 0.5 m/s where the old node drove 2.7 m
+    # without noticing. Predict, but do not panic.
+    predict_max: 0.12
+
+    # --- reshaping ---------------------------------------------------------
+    # 0.30, not 0.60. Going wide fast is the whole point of an asymmetric rate
+    # limit, but the wheels have to scrub sideways to do it and there is a speed
+    # past which the scrub is itself the disturbance: at 0.60 m/s the stance
+    # slammed 0.380 -> 0.600 m in 0.18 s with all four wheels planted, and that
+    # lateral impulse threw the robot on Rubicon every time. 0.30 still reaches
+    # full width in 0.37 s, against 1.8 s for the old node's symmetric 0.12.
+    reshape_rate_up: 0.30
+    reshape_rate_down: 0.10
+    # 0.25 rad (14 deg), not 24. On Rubicon the robot genuinely stands on three
+    # wheels much of the time, and a triangle's margin is well under the 31 deg
+    # a square gives -- so a 24 deg target meant the stance was permanently
+    # "urgent", sat half-splayed doing nothing useful, and hunted.
+    margin_target: 0.25
+    margin_tau: 0.20
+    speed_calm: 0.25
+    speed_wide: 0.70
+    rough_ref: 0.35
+    rough_tau: 1.0
+    # Residual gyro noise after gyro_tau, removed in quadrature so a motionless
+    # robot reports zero roughness instead of its own noise floor.
+    rough_floor: 0.080
+    widen_max: 0.110
+    # 0.090, and gated on smoothness. Crouching is the only lever that costs
+    # ground clearance, and the cost has been measured: the old node at
+    # crouch_max 0.10 reached 0.30 m ride height on Rubicon, grounded out, and
+    # three feet fell to ~5 N against 191 N of weight -- it dug itself in and
+    # covered 0.3 m in 10 s of commanded driving. So the crouch is available in
+    # full on smooth ground, where it buys cornering stability and nothing is
+    # going to hit the belly, and withdrawn as the terrain roughens.
+    crouch_max: 0.090
+    crouch_rough_gate: 0.60
+    # The opposite lever. With fewer than three feet loaded the legs extend to
+    # chase the surface instead of crouching further into it.
+    reach_max: 0.050
+    # Reach moves the ride height, so it is the lever that shows up as the body
+    # bouncing -- the width levers move sideways, where nothing is stacked on
+    # top. It gets its own slower rate, and contact loss is debounced before it
+    # acts at all: an instantaneous feet<3 test made it chase the fourth wheel
+    # flickering across the 5 N threshold, +/-50 mm at a time, which by itself
+    # took the body rate from 0.006 to 0.13 rad/s rms standing still.
+    reach_rate: 0.06
+    contact_debounce: 0.35
+
+    # Urgency drives levers that move real mass, and every input to it is noisy.
+    # Rise quickly, fall slowly -- the same asymmetry as the rate limits.
+    urgency_rise_tau: 0.15
+    urgency_fall_tau: 1.20
+
+    dz_max: 0.110
+    contact_force: 5.0
+    # How long a wheel still counts as support after its load drops below the
+    # threshold. Driving over Rubicon unloads a wheel constantly -- a facet edge
+    # does it and the wheel is back down hundredths of a second later -- and
+    # every one of those drops the pattern under three contacts, where the
+    # margin is not "small" but hugely negative, because two-point support IS
+    # geometrically a tipover. Unheld, the measure read -35 deg on a robot
+    # upright at 10 deg of roll and pinned the governor at its crawl floor: it
+    # "survived" by covering 0.24 m in 8 s. The hold is shorter than the time
+    # any lever takes to act, so nothing is decided on a contact truly gone.
+    contact_hold: 0.25
+    # 0 means resolve the sign of the foot force sensors at runtime from the
+    # robot's own weight, rather than trusting the measure_direction tag.
+    force_sign: 0.0
+
+    # --- governor ----------------------------------------------------------
+    governor_enable: true
+    governor_rate: 50.0
+    # The envelope is defined as "the acceleration that would bring the margin
+    # down to tip_margin_safe", so this is the reserve deliberately held back
+    # for the terrain rather than spent on cornering. 16 deg of the ~31 deg a
+    # nominal stance has, or of the ~46 deg a splayed one has.
+    # 0.20 rad (11.5 deg) of the ~31 deg a nominal stance has. Held back for the
+    # terrain rather than spent on cornering. Larger is not automatically safer:
+    # at 16 deg the reserve ate so much of the envelope that the robot refused
+    # to turn at all on any real slope.
+    tip_margin_safe: 0.20
+    # Below this the command is pulled toward zero rather than merely capped.
+    # At 7 deg of margin the legs are not going to save it and continuing to
+    # drive is what finishes the rollover.
+    tip_margin_crit: 0.12   # rad, 7 deg
+    v_max: 1.5
+    w_max: 1.5
+    accel_max: 1.5
+    yaw_accel_max: 2.0
+    cmd_timeout: 0.5
+    # Never govern below this lateral acceleration: without a floor, a
+    # momentary bad margin reading would refuse all motion, including the
+    # motion needed to drive off whatever caused it.
+    a_lat_floor: 0.8
+    a_lat_ceiling: 12.0
+    # Speed ceiling over fully rough ground. This is the one limit not derived
+    # from the tipping envelope, because the envelope only knows the ground the
+    # wheels are on right now -- it cannot see the impulse coming.
+    v_rough_min: 0.35
+    # Speed still permitted with no margin left. NOT zero: a robot out of margin
+    # is usually a robot on a slope, and driving off it is the way out. Zeroing
+    # the command instead pinned it where it got into trouble, still sliding,
+    # unable to accept any command that would have taken it somewhere flatter.
+    v_crit_min: 0.25
+
+    # --- terrain preview ---------------------------------------------------
+    # A plane fit to the lidar returns ahead of the robot. Widening takes
+    # ~0.2 s at the rate limit and crouching longer, and a bump met at 1 m/s
+    # arrives with no warning at all from the IMU -- which only ever reports
+    # terrain the robot has already hit. The lidar sees it 1.5 s out.
+    preview_enable: true
+    preview_near: 0.45
+    preview_far: 1.80
+    preview_half_width: 0.45
+    preview_tau: 0.30
+    preview_rough_ref: 0.045
+    # The datasheet range precision, removed in quadrature. Without it a plane
+    # fit to flat ground reports ~0.7 cm of "roughness" that is pure sensor
+    # noise, which held the stance part-widened while standing still.
+    preview_rough_floor: 0.020
