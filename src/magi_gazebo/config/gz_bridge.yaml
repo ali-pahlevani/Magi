@@ -1,0 +1,81 @@
+# Gazebo <-> ROS 2 topic bridge for the MAGI Go2W.
+#
+# Joint states, wheel odometry and the IMU *state interfaces* already reach ROS
+# through ros2_control (joint_state_broadcaster / imu_sensor_broadcaster /
+# diff_drive_controller), so they are not bridged here. What is bridged is the
+# simulation clock plus the sensors that ros2_control has no concept of:
+# the lidar, the camera and the foot force/torque sensors.
+#
+# The raw /imu is bridged as well, separately from imu_sensor_broadcaster. The
+# broadcaster republishes what the hardware interface exposes; this is the
+# sensor's own output, which is what you want when comparing against the real
+# robot's IMUState message.
+
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS
+
+# --- Livox MID-360 ----------------------------------------------------------
+# gpu_lidar publishes a LaserScan on <topic> and a PointCloudPacked on
+# <topic>/points. The cloud is the one SLAM wants; the flat scan is kept
+# because 2D tooling and Nav2's obstacle layer can consume it directly.
+- ros_topic_name: "/lidar/points"
+  gz_topic_name: "/lidar/points"
+  ros_type_name: "sensor_msgs/msg/PointCloud2"
+  gz_type_name: "gz.msgs.PointCloudPacked"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/lidar/scan"
+  gz_topic_name: "/lidar"
+  ros_type_name: "sensor_msgs/msg/LaserScan"
+  gz_type_name: "gz.msgs.LaserScan"
+  direction: GZ_TO_ROS
+
+# --- front camera -----------------------------------------------------------
+- ros_topic_name: "/front_camera/image"
+  gz_topic_name: "/front_camera/image"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/front_camera/camera_info"
+  gz_topic_name: "/front_camera/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+
+# --- body IMU (raw sensor output) -------------------------------------------
+- ros_topic_name: "/imu/data_raw"
+  gz_topic_name: "/imu"
+  ros_type_name: "sensor_msgs/msg/Imu"
+  gz_type_name: "gz.msgs.IMU"
+  direction: GZ_TO_ROS
+
+# --- foot force sensors -----------------------------------------------------
+# The real robot reports int16[4] foot_force in LowState; here each foot is a
+# full wrench measured through the wheel axle.
+- ros_topic_name: "/foot_force/FL"
+  gz_topic_name: "/foot_force/FL"
+  ros_type_name: "geometry_msgs/msg/Wrench"
+  gz_type_name: "gz.msgs.Wrench"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/foot_force/FR"
+  gz_topic_name: "/foot_force/FR"
+  ros_type_name: "geometry_msgs/msg/Wrench"
+  gz_type_name: "gz.msgs.Wrench"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/foot_force/RL"
+  gz_topic_name: "/foot_force/RL"
+  ros_type_name: "geometry_msgs/msg/Wrench"
+  gz_type_name: "gz.msgs.Wrench"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/foot_force/RR"
+  gz_topic_name: "/foot_force/RR"
+  ros_type_name: "geometry_msgs/msg/Wrench"
+  gz_type_name: "gz.msgs.Wrench"
+  direction: GZ_TO_ROS

@@ -1,0 +1,110 @@
+# RTAB-Map configured for 3D lidar SLAM on the MAGI Go2W.
+#
+# ---------------------------------------------------------------------------
+# Where this sits in the TF chain
+# ---------------------------------------------------------------------------
+#   map  -> odom     published HERE, by rtabmap. The loop-closure correction.
+#   odom -> base     published by the Phase 2 EKF. Untouched.
+#
+# RTAB-Map is deliberately NOT run with icp_odometry. rtabmap_odom's
+# icp_odometry would publish odom -> base itself and fight the EKF for it, and
+# the EKF already fuses wheel vx, IMU attitude/rates and leg-kinematics vz.
+# Instead rtabmap consumes /odometry/filtered as its odometry source and only
+# adds the map -> odom correction on top. One publisher per transform.
+#
+# The consequence to keep in mind: RTAB-Map inherits whatever the EKF gets
+# wrong between loop closures. EKF yaw is gyro-integrated with no absolute
+# reference and drifts; odom z is terrain-relative and does not track the
+# terrain's 5 m of relief. Both are exactly what loop closure exists to absorb,
+# which is why Reg/Force3DoF is false: the correction has to be full 6-DoF.
+
+rtabmap:
+  ros__parameters:
+    use_sim_time: true
+
+    frame_id: base
+    map_frame_id: map
+    # Empty => take odometry from the /odom TOPIC (remapped to
+    # /odometry/filtered in the launch file) rather than from TF, so rtabmap
+    # gets the EKF's covariance rather than assuming a default.
+    odom_frame_id: ""
+
+    # Lidar only. No camera is fused: the Go2's front camera is a 120 deg
+    # pinhole with no depth, so it contributes nothing to a 3D lidar map.
+    subscribe_depth: false
+    subscribe_rgb: false
+    subscribe_scan: false
+    subscribe_scan_cloud: true
+    subscribe_odom_info: false
+
+    approx_sync: true
+    queue_size: 20
+    # 2.0, not 0.5. This is how long the scan-to-base conversion will wait for
+    # TF before giving up, and giving up is not recoverable: a single "Could
+    # not convert 3d laser scan msg" during startup left rtabmap running but
+    # permanently silent -- no graph nodes, no /cloud_map, no map -> odom, and
+    # no further errors to say so. Started by hand against an already-warm
+    # simulation the identical configuration mapped fine, which is what
+    # identified this as a race rather than a configuration problem.
+    wait_for_transform: 2.0
+    publish_tf: true
+    database_path: ~/.ros/magi_rtabmap.db
+
+    # ---- registration --------------------------------------------------
+    # 1 = ICP. There are no visual features to register on in a lidar-only
+    # pipeline, so the default visual strategy would never find a link.
+    Reg/Strategy: "1"
+    # Full 6-DoF. Rubicon has 5 m of relief and the robot pitches and rolls
+    # several degrees while driving; constraining to 3-DoF would fight it.
+    Reg/Force3DoF: "false"
+
+    Icp/PointToPlane: "true"
+    Icp/PointToPlaneK: "20"
+    Icp/PointToPlaneRadius: "0"
+    # 10 cm voxels: the scan is 23,040 points at 10 Hz, and matching raw is
+    # both slow and unnecessary given the terrain's scale.
+    Icp/VoxelSize: "0.1"
+    Icp/MaxCorrespondenceDistance: "1.0"
+    Icp/Iterations: "10"
+    Icp/Epsilon: "0.001"
+    Icp/CorrespondenceRatio: "0.2"
+    Icp/MaxTranslation: "3.0"
+    # The lidar sits ~0.12 m above base with a -7..+52 deg vertical FOV, so it
+    # mostly looks outward and up rather than at the robot. This trims any
+    # residual self-returns off the legs and head regardless.
+    Icp/RangeMin: "0.6"
+
+    # ---- graph / memory ------------------------------------------------
+    Mem/IncrementalMemory: "true"      # SLAM (mapping). Set false to localise.
+    Mem/STMSize: "30"
+    Mem/LaserScanNormalK: "20"
+    RGBD/ProximityBySpace: "true"
+    RGBD/ProximityMaxGraphDepth: "0"
+    RGBD/ProximityPathMaxNeighbors: "1"
+    RGBD/AngularUpdate: "0.05"
+    RGBD/LinearUpdate: "0.05"
+    RGBD/OptimizeFromGraphEnd: "false"
+    RGBD/NeighborLinkRefining: "true"
+
+    # ---- occupancy grid ------------------------------------------------
+    # The map is volumetric. Two topics come out of the same graph:
+    #   /cloud_map   the 3D point cloud, with real vertical structure
+    #   /map         a 2D projection of it, which is what Nav2 will want
+    # Setting this false would flatten the map at the source, and there would
+    # be no 3D structure left to project from or to display.
+    # Verified on Rubicon: 20,359 points spanning z -0.52..+1.70 m (2.22 m
+    # spread, sd 0.58), with map->odom correcting z by -0.204 m and roll/pitch
+    # by 0.74/0.68 deg -- i.e. a genuinely 6-DoF correction, not a planar one.
+    Grid/3D: "true"
+    Grid/Sensor: "0"                   # build the grid from the lidar cloud
+    Grid/CellSize: "0.1"
+    Grid/RangeMin: "0.6"
+    Grid/RangeMax: "20.0"
+    Grid/ClusterRadius: "0.5"
+    Grid/GroundIsObstacle: "false"
+    # Rubicon is rocky and genuinely steep; a stricter angle would paint most
+    # of the drivable basin as obstacle.
+    Grid/MaxGroundAngle: "45"
+    Grid/MaxObstacleHeight: "1.5"
+    Grid/NormalsSegmentation: "true"
+    GridGlobal/MinSize: "20.0"

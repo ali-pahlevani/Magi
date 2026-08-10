@@ -1,0 +1,221 @@
+<?xml version="1.0"?>
+<!--
+  Sensor suite for the MAGI Go2W, matching the real robot's hardware.
+
+  Real Go2-W                     modelled here
+    Livox MID-360 lidar          gpu_lidar, see the scan-pattern caveat below
+    front HD wide-angle camera   camera, 1280x720
+    body IMU (6-axis + fusion)   imu, with a MEMS noise model
+    foot force sensors x4        force_torque on each wheel joint
+    UWB positioning              not modelled (no native Gazebo equivalent)
+    no GPS                       deliberately absent, the Go2 has none
+
+  All sensor links are massless and fixed, so sdformat lumps them into `base`
+  and carries the sensor pose across. `gz_frame_id` keeps each ROS message
+  stamped in the frame robot_state_publisher actually publishes.
+-->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- ===================================================================
+       Front camera link.
+
+       Unitree does not publish the exact optical-centre offset, so this sits
+       at the front face of the head, level with Head_upper (which the URDF
+       places at x = 0.285). Adjust here if you measure the real mount.
+       The _optical frame carries the REP-103 camera convention (z forward,
+       x right, y down) that image pipelines expect.
+       =================================================================== -->
+  <xacro:macro name="magi_front_camera_link" params="parent">
+    <link name="front_camera">
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.001"/>
+        <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+      </inertial>
+    </link>
+    <joint name="front_camera_joint" type="fixed">
+      <origin xyz="0.2915 0 0.01" rpy="0 0 0"/>
+      <parent link="${parent}"/>
+      <child link="front_camera"/>
+      <axis xyz="0 0 0"/>
+    </joint>
+
+    <link name="front_camera_optical"/>
+    <joint name="front_camera_optical_joint" type="fixed">
+      <origin xyz="0 0 0" rpy="-1.5707963267948966 0 -1.5707963267948966"/>
+      <parent link="front_camera"/>
+      <child link="front_camera_optical"/>
+      <axis xyz="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- ===================================================================
+       Livox MID-360.
+
+       Real device: 360 deg horizontal, -7..+52 deg vertical, 0.1-40 m at 10%
+       reflectivity, 200,000 points/s, 10 Hz, +/-2 cm range precision.
+
+       CAVEAT: the MID-360 uses a non-repetitive rosette scan. gpu_lidar can
+       only produce a uniform raster, and no Livox pattern plugin exists for
+       Harmonic. The FOV, range, rate and point budget below are the real
+       numbers (720 x 32 = 23,040 points per 10 Hz scan is ~200k points/s) but
+       the sampling *distribution* is uniform rather than rosette. Generic
+       LIO handles that fine; Livox-native SLAM that keys off scan lines and
+       per-point timestamps will not behave authentically.
+       =================================================================== -->
+  <xacro:macro name="magi_lidar" params="link:=livox_mid360 topic:=lidar">
+    <gazebo reference="${link}">
+      <sensor name="livox_mid360" type="gpu_lidar">
+        <always_on>1</always_on>
+        <update_rate>10</update_rate>
+        <topic>${topic}</topic>
+        <gz_frame_id>${link}</gz_frame_id>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>720</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.141592653589793</min_angle>
+              <max_angle>3.141592653589793</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>32</samples>
+              <resolution>1</resolution>
+              <!-- -7 deg .. +52 deg -->
+              <min_angle>-0.12217304763960307</min_angle>
+              <max_angle>0.9075712110370513</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.1</min>
+            <max>40.0</max>
+            <resolution>0.01</resolution>
+          </range>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <!-- datasheet range precision is <= 2 cm at 10 m -->
+            <stddev>0.02</stddev>
+          </noise>
+        </lidar>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- ===================================================================
+       Front camera sensor. 1280x720 at 30 Hz with a 120 deg horizontal FOV.
+
+       Modelled as a rectilinear `camera` rather than `wide_angle_camera`: the
+       latter needs an explicit lens/distortion model that Unitree does not
+       publish, and a plain pinhole at 120 deg is the conventional stand-in.
+       Expect more edge stretching than the real fisheye optics.
+       =================================================================== -->
+  <xacro:macro name="magi_camera" params="link:=front_camera topic:=front_camera/image">
+    <gazebo reference="${link}">
+      <sensor name="front_camera" type="camera">
+        <always_on>1</always_on>
+        <update_rate>30</update_rate>
+        <topic>${topic}</topic>
+        <gz_frame_id>front_camera_optical</gz_frame_id>
+        <camera>
+          <horizontal_fov>2.0943951023931953</horizontal_fov>
+          <image>
+            <width>1280</width>
+            <height>720</height>
+            <format>R8G8B8</format>
+          </image>
+          <clip>
+            <near>0.05</near>
+            <far>100.0</far>
+          </clip>
+          <noise>
+            <type>gaussian</type>
+            <mean>0.0</mean>
+            <stddev>0.005</stddev>
+          </noise>
+        </camera>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- ===================================================================
+       Foot force sensor.
+
+       The real robot reports int16[4] foot_force in LowState. A force_torque
+       sensor on the wheel joint measures what is transmitted through the axle,
+       which is the ground reaction plus wheel inertia, the closest available
+       analogue. Note this attaches to a JOINT, not a link.
+       =================================================================== -->
+  <xacro:macro name="magi_foot_force" params="prefix">
+    <gazebo reference="${prefix}_foot_joint">
+      <sensor name="${prefix}_foot_force" type="force_torque">
+        <always_on>1</always_on>
+        <update_rate>200</update_rate>
+        <topic>foot_force/${prefix}</topic>
+        <gz_frame_id>${prefix}_calf</gz_frame_id>
+        <force_torque>
+          <!-- Measured in the PARENT (calf) frame, not the child. The child is
+               the wheel, which spins at ~11.6 rad/s while driving, so a
+               child-frame wrench has its fx/fz components rotating with it and
+               is useless to read. The calf frame does not spin. -->
+          <frame>parent</frame>
+          <measure_direction>parent_to_child</measure_direction>
+        </force_torque>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- ===================================================================
+       Body IMU, 200 Hz, with a consumer-MEMS noise model.
+
+       Without noise an EKF gets tuned against a fiction, so the numbers below
+       are the widely used ADIS16448-class figures: gyro 2e-4 rad/s white noise
+       with a slow bias walk, accelerometer 1.7e-2 m/s^2. Adjust if you
+       characterise the real unit.
+       =================================================================== -->
+  <xacro:macro name="magi_imu" params="link:=imu topic:=imu">
+    <gazebo reference="${link}">
+      <sensor name="imu_sensor" type="imu">
+        <always_on>1</always_on>
+        <update_rate>200</update_rate>
+        <topic>${topic}</topic>
+        <gz_frame_id>${link}</gz_frame_id>
+        <imu>
+          <angular_velocity>
+            <xacro:magi_imu_axis axis="x" stddev="2e-4" bias_mean="7.5e-6" bias_stddev="8e-7"/>
+            <xacro:magi_imu_axis axis="y" stddev="2e-4" bias_mean="7.5e-6" bias_stddev="8e-7"/>
+            <xacro:magi_imu_axis axis="z" stddev="2e-4" bias_mean="7.5e-6" bias_stddev="8e-7"/>
+          </angular_velocity>
+          <linear_acceleration>
+            <xacro:magi_imu_axis axis="x" stddev="1.7e-2" bias_mean="0.1" bias_stddev="0.001"/>
+            <xacro:magi_imu_axis axis="y" stddev="1.7e-2" bias_mean="0.1" bias_stddev="0.001"/>
+            <xacro:magi_imu_axis axis="z" stddev="1.7e-2" bias_mean="0.1" bias_stddev="0.001"/>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:macro name="magi_imu_axis" params="axis stddev bias_mean bias_stddev">
+    <xacro:element xacro:name="${axis}">
+      <noise type="gaussian">
+        <mean>0.0</mean>
+        <stddev>${stddev}</stddev>
+        <bias_mean>${bias_mean}</bias_mean>
+        <bias_stddev>${bias_stddev}</bias_stddev>
+      </noise>
+    </xacro:element>
+  </xacro:macro>
+
+  <!-- Everything at once. -->
+  <xacro:macro name="magi_sensors" params="">
+    <xacro:magi_imu/>
+    <xacro:magi_lidar/>
+    <xacro:magi_camera/>
+    <xacro:magi_foot_force prefix="FL"/>
+    <xacro:magi_foot_force prefix="FR"/>
+    <xacro:magi_foot_force prefix="RL"/>
+    <xacro:magi_foot_force prefix="RR"/>
+  </xacro:macro>
+
+</robot>

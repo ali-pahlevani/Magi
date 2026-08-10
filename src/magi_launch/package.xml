@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>magi_launch</name>
+  <version>0.1.0</version>
+  <description>
+    Top-level launchers for the MAGI Go2W. Composes the simulation, control and
+    state-estimation stacks into runnable configurations, and is where SLAM,
+    localization and navigation will be added.
+  </description>
+  <maintainer email="maedehjeddi1993@gmail.com">maedeh</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>magi_bringup</exec_depend>
+  <exec_depend>magi_description</exec_depend>
+  <exec_depend>magi_gazebo</exec_depend>
+  <exec_depend>magi_control</exec_depend>
+  <exec_depend>magi_localization</exec_depend>
+  <exec_depend>magi_slam</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

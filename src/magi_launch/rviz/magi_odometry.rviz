@@ -1,0 +1,251 @@
+Panels:
+- Class: rviz_common/Displays
+  Name: Displays
+  Property Tree Widget:
+    Expanded:
+    - /Global Options1
+    - /Odometry EKF1
+    - /Odometry wheel raw1
+    Splitter Ratio: 0.5
+  Tree Height: 660
+- Class: rviz_common/Views
+  Name: Views
+  Expanded:
+  - /Current View1
+  Splitter Ratio: 0.5
+Visualization Manager:
+  Class: ''
+  Name: root
+  Displays:
+  - Class: rviz_default_plugins/Grid
+    Name: Grid
+    Enabled: true
+    Alpha: 0.5
+    Cell Size: 1
+    Color: 160; 160; 164
+    Line Style:
+      Line Width: 0.03
+      Value: Lines
+    Normal Cell Count: 0
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Plane: XY
+    Plane Cell Count: 60
+    Reference Frame: <Fixed Frame>
+    Value: true
+  - Class: rviz_default_plugins/RobotModel
+    Name: RobotModel
+    Enabled: true
+    Alpha: 1
+    Collision Enabled: false
+    Visual Enabled: true
+    Description File: ''
+    Description Source: Topic
+    Description Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /robot_description
+    TF Prefix: ''
+    Update Interval: 0
+    Value: true
+    Mass Properties:
+      Inertia: false
+      Mass: false
+  - Class: rviz_default_plugins/TF
+    Name: TF
+    Enabled: true
+    Frame Timeout: 15
+    Marker Scale: 0.6
+    Show Arrows: false
+    Show Axes: true
+    Show Names: true
+    Update Interval: 0
+    Value: true
+    Frames:
+      All Enabled: false
+      odom:
+        Value: true
+      base:
+        Value: true
+      imu:
+        Value: true
+      livox_mid360:
+        Value: true
+  - Class: rviz_default_plugins/Odometry
+    Name: Odometry EKF
+    Enabled: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /odometry/filtered
+    Covariance:
+      Value: false
+    Keep: 2000
+    Position Tolerance: 0.05
+    Angle Tolerance: 0.05
+    Shape:
+      Alpha: 1
+      Color: 25; 255; 100
+      Head Length: 0.06
+      Head Radius: 0.025
+      Shaft Length: 0.15
+      Shaft Radius: 0.01
+      Value: Arrow
+    Value: true
+  - Class: rviz_default_plugins/Odometry
+    Name: Odometry wheel raw
+    Enabled: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /wheel_controller/odom
+    Covariance:
+      Value: false
+    Keep: 2000
+    Position Tolerance: 0.05
+    Angle Tolerance: 0.05
+    Shape:
+      Alpha: 1
+      Color: 255; 40; 25
+      Head Length: 0.06
+      Head Radius: 0.025
+      Shaft Length: 0.15
+      Shaft Radius: 0.01
+      Value: Arrow
+    Value: true
+  - Class: rviz_default_plugins/PointCloud2
+    Name: Lidar
+    Enabled: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /lidar/points
+    Alpha: 1
+    Autocompute Intensity Bounds: true
+    Axis: Z
+    Color: 255; 255; 255
+    Color Transformer: AxisColor
+    Decay Time: 0
+    Position Transformer: XYZ
+    Size (Pixels): 2
+    Size (m): 0.02
+    Style: Points
+    Use rainbow: true
+    Value: true
+  - Class: rviz_default_plugins/Image
+    Name: FrontCamera
+    Enabled: false
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Best Effort
+      Value: /front_camera/image
+    Max Value: 1
+    Median window: 5
+    Min Value: 0
+    Normalize Range: true
+    Value: false
+  - Class: rviz_default_plugins/Polygon
+    Name: Support polygon
+    Enabled: true
+    Alpha: 1.0
+    Color:
+    - 25
+    - 255
+    - 120
+    Topic:
+      Depth: 10
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter size: 10
+      Value: /magi/support_polygon
+    Value: true
+  - Class: rviz_default_plugins/PointStamped
+    Name: CoP (tipping point)
+    Enabled: true
+    Alpha: 1.0
+    Color:
+    - 255
+    - 60
+    - 60
+    Radius: 0.035
+    History Length: 1
+    Topic:
+      Depth: 10
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter size: 10
+      Value: /magi/cop
+    Value: true
+  - Class: rviz_default_plugins/PointStamped
+    Name: CoM
+    Enabled: true
+    Alpha: 1.0
+    Color:
+    - 80
+    - 160
+    - 255
+    Radius: 0.03
+    History Length: 1
+    Topic:
+      Depth: 10
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter size: 10
+      Value: /magi/com
+    Value: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: odom
+    Frame Rate: 30
+  Tools:
+  - Class: rviz_default_plugins/Interact
+    Hide Inactive Objects: true
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/FocusCamera
+  - Class: rviz_default_plugins/Measure
+    Line color: 128; 128; 0
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 12
+      Focal Point:
+        X: 2
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Near Clip Distance: 0.01
+      Pitch: 0.55
+      Yaw: 2.4
+      Target Frame: <Fixed Frame>
+      Value: Orbit (rviz_default_plugins)
+    Saved: null
+Window Geometry:
+  Height: 900
+  Width: 1500
+  QMainWindow State: ''
+  Displays:
+    collapsed: false
+  Views:
+    collapsed: false

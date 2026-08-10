@@ -1,0 +1,98 @@
+# Tuning for magi_balance.py -- the closed-loop stance controller.
+#
+# The controller has one fast lever and two slow ones:
+#
+#   fast   body tilt, via differential leg length. Runs at 100 Hz and is what
+#          actually rejects terrain disturbances.
+#   slow   stance width and ride height. Rate-limited to 0.12 m/s because
+#          widening scrubs the wheels sideways, so a full widen takes ~0.6 s.
+#
+# Measured on this robot: at 0.35 m/s and 0.15 rad/s the steady turn load moves
+# the centre of pressure by 1.7 mm out of the 190 mm half-track available, and
+# the static tipping angle at the nominal 0.380 m track is 31.4 deg. So the
+# rollovers seen on Rubicon are not centrifugal -- they are terrain impulses
+# going straight into a rigid body. That is why the tilt gains matter most and
+# why the slow levers are driven by anticipation (speed, recent roughness) as
+# well as by the measured margin.
+
+magi_balance:
+  ros__parameters:
+    use_sim_time: true
+
+    rate: 100.0
+    command_horizon: 0.05
+    controller: leg_controller
+
+    ride_height: 0.40
+    stand_time: 2.5
+    startup_delay: 2.0
+
+    # --- attitude loop ---------------------------------------------------
+    # Dimensionless. 1.0 would command the whole measured attitude error as a
+    # body rotation in one cycle; with a 0.05 s trajectory horizon under it,
+    # that overshoots, so these sit well below unity.
+    #
+    # The integral carries the steady part. Measured standing on Rubicon with
+    # P only: roll sd fell 1.04 -> 0.31 deg (good disturbance rejection) but
+    # the 1.26 deg mean tilt only reached 1.14 deg, because the legs droop
+    # under load and no proportional term cancels a constant. A slope is a
+    # constant, so levelling on one is the integrator's job.
+    roll_kp: 0.55
+    roll_ki: 0.60
+    roll_kd: 0.03
+    pitch_kp: 0.45
+    pitch_ki: 0.50
+    pitch_kd: 0.05
+    tilt_i_max: 0.15
+    tilt_max: 0.30
+    # Rolls the loop gain off above ~1.6 Hz. Without it the pitch axis limit
+    # cycled at ~10 Hz (body rate rms 0.037 -> 0.183 the moment the loop was
+    # enabled); with it, every gain combination swept stayed quiet. Measured
+    # standing on Rubicon at ctau 0.10, roll settles to +0.02 +- 0.07 deg and
+    # pitch to +0.01 +- 0.08 deg, against +2.12 / -1.10 deg frozen.
+    command_tau: 0.10
+
+    # --- lean feed-forward -----------------------------------------------
+    # 1.0 is the geometrically exact atan(v*w/g). Worth almost nothing at the
+    # speeds this robot survives, but it costs nothing and grows with v*w.
+    lean_gain: 1.0
+    lean_max: 0.25
+    accel_tau: 0.25
+
+    # --- reshaping --------------------------------------------------------
+    margin_target: 0.070
+    margin_tau: 0.30
+    speed_calm: 0.20
+    speed_wide: 0.80
+    # rad/s of RMS body rate. Deliberately a RATE, not an attitude error: the
+    # error includes the steady tilt of whatever the robot is parked on, which
+    # held the stance permanently widened while standing perfectly still.
+    rough_ref: 0.35
+    rough_tau: 1.0
+    # Residual noise after gyro_tau, removed in quadrature. Without it a
+    # motionless robot reported 0.12 rad/s and sat permanently widened.
+    # A closed loop against compliant legs leaves ~0.10 rad/s of 10 Hz buzz at
+    # about 0.09 deg of amplitude -- far too small to matter for stability, but
+    # enough to peg the roughness estimate if it is not subtracted out.
+    rough_floor: 0.080
+    # The IMU noise model is loud enough that raw gyro fed straight into the D
+    # term became visible tilt jitter. Terrain disturbance is a few Hz at most.
+    gyro_tau: 0.05
+    # 0.070 m of extra half-track takes the track from 0.380 to 0.520 m, which
+    # raises the static tipping angle from 31.4 to 39.9 deg. The hips reach
+    # +/-60 deg and the IK stays in range, so this is a soft cap, not a limit.
+    widen_max: 0.070
+    # 0.06, not 0.10. At 0.10 the ride height reached 0.30 m and the robot
+    # grounded out on Rubicon: three feet fell to ~5 N against 191 N of weight
+    # and it covered 0.3 m in 10 s of commanded driving.
+    crouch_max: 0.060
+    # The opposite lever. With fewer than three feet loaded the legs extend to
+    # chase the surface instead of crouching further into it.
+    reach_max: 0.060
+    reshape_rate: 0.12
+
+    dz_max: 0.090
+    contact_force: 5.0
+    # 0 means resolve the sign of the foot force sensors at runtime from the
+    # robot's own weight, rather than trusting the measure_direction tag.
+    force_sign: 0.0

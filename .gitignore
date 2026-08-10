@@ -1,0 +1,36 @@
+# --- colcon build artifacts -------------------------------------------------
+build/
+install/
+log/
+
+# --- editor / IDE state -----------------------------------------------------
+# browse.vc.db is the VS Code C/C++ IntelliSense database; it reached 1.1 GB
+# here and must never be committed.
+.vscode/
+*.vc.db
+*.vc.db-*
+
+# --- python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+
+# --- ros / gazebo runtime ---------------------------------------------------
+*.bag
+*.db3
+.gazebo/
+.gz/
+
+# --- vendored Gazebo Fuel world ---------------------------------------------
+# The Rubicon model is 342 MB and rubicon.dae alone is 188 MB, well past
+# GitHub's 100 MB per-file limit. It stays on disk for offline use but is not
+# tracked; rebuild it after a fresh clone with:
+#     src/magi_gazebo/scripts/fetch_rubicon.sh
+# That re-downloads it, verifies the archive and re-applies the terrain
+# friction patch, so the result is identical to what is used here.
+src/magi_gazebo/models/Rubicon/
+
+# --- upstream reference checkout --------------------------------------------
+# Not part of this project's source: it is the original jj7258/unitree_go2w_ros2
+# working copy (its own git repo, and COLCON_IGNOREd). Everything the project
+# needs was copied into magi_description.
+src/unitree_go2w_ros2/

@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<!--
+  Gazebo Sim (Harmonic) extensions: the ros2_control system plugin, the IMU
+  sensor, and per-link contact surfaces.
+
+  NOTE the plugin filename is `gz_ros2_control-system` (the Harmonic build).
+  The Humble binary of gz_ros2_control links Ignition Fortress and will not
+  load here; this workspace builds it from source with GZ_VERSION=harmonic.
+-->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- Wheel contact friction.
+       mu1 acts along fdir1 (the rolling direction, +x in the wheel frame,
+       since the wheel spins about its local y) and mu2 across it.
+
+       These are deliberately anisotropic. All four wheels are fixed and
+       non-steerable, so every yaw manoeuvre scrubs them sideways. With
+       near-isotropic friction that scrub reacts straight into the hip joints,
+       which saturate at their 23.7 N.m URDF effort limit, splay the legs and
+       drop the body, a state a position-held stance cannot recover from.
+
+       Sizing mu from that torque budget: a yaw manoeuvre scrubs each wheel
+       with up to mu*N sideways (N ~ 48 N per wheel), acting a stance height
+       (~0.4 m) below the hip axis, so the hip sees mu*48*0.4 N.m. Staying
+       under 23.7 N.m needs mu < 1.23; 1.0 leaves headroom while still giving
+       far more longitudinal grip than driving needs.
+
+       NOTE mu2/fdir1 are set for completeness but dartsim, the default
+       Gazebo physics engine, uses a single isotropic friction coefficient per
+       shape and ignores them. Do not rely on anisotropy here. -->
+  <xacro:macro name="magi_wheel_surface" params="link">
+    <gazebo reference="${link}">
+      <mu1>1.0</mu1>
+      <mu2>0.8</mu2>
+      <fdir1>1 0 0</fdir1>
+      <kp>1000000.0</kp>
+      <kd>100.0</kd>
+      <minDepth>0.001</minDepth>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:macro name="magi_gazebo" params="controllers_file">
+
+    <gazebo>
+      <plugin filename="gz_ros2_control-system"
+              name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <parameters>${controllers_file}</parameters>
+      </plugin>
+    </gazebo>
+
+    <!-- Sensors (IMU, lidar, camera, foot force) live in go2w_sensors.xacro. -->
+
+    <xacro:magi_wheel_surface link="FL_foot"/>
+    <xacro:magi_wheel_surface link="FR_foot"/>
+    <xacro:magi_wheel_surface link="RL_foot"/>
+    <xacro:magi_wheel_surface link="RR_foot"/>
+
+  </xacro:macro>
+
+</robot>

@@ -1,0 +1,126 @@
+<?xml version="1.0"?>
+<!--
+  ros2_control interface definition for the Go2W under Gazebo Sim.
+
+  Exactly ONE command interface is declared per joint on purpose. The
+  GazeboSimSystem::write() dispatch is an if/else chain that tests VELOCITY
+  before POSITION before EFFORT, so a joint exposing several would silently
+  ignore all but the first. Legs are torque-controlled, wheels are
+  velocity-controlled.
+
+  LEGS RUN ON EFFORT, which is what the real robot does. Unitree's low-level
+  MotorCmd is (q, dq, tau, kp, kd) and the motor applies
+      tau = kp*(q_des - q) + kd*(dq_des - dq) + tau_ff
+  joint_trajectory_controller in effort mode computes exactly that law from its
+  per-joint PID gains, so the simulated joint behaves like the real actuator.
+
+  The point of torque control here is compliance. Under the previous position
+  interface gz_ros2_control drove the joints as rigid velocity constraints, and
+  on the faceted Rubicon terrain the load collapsed onto one diagonal pair.
+  Measured in stance: FR calf 11.14 N.m against FL calf 0.06 N.m, i.e. the
+  front-left wheel was barely touching the ground. Compliant legs share the
+  load and keep all four wheels planted.
+
+  Two `initial_value` seeds matter:
+    * position  - the robot materialises already standing, instead of
+                  collapsing on the first tick.
+    * effort    - unlike position/velocity, declaring an effort command
+                  interface sets joint_control_method |= EFFORT immediately at
+                  init (gz_system.cpp:476), before any controller is active. So
+                  between spawn and leg_controller activation the legs are
+                  driven by whatever joint_effort_cmd holds. Seeding it with
+                  the measured gravity-hold torque keeps the robot standing
+                  through that window instead of folding.
+-->
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- Stance pose. With thigh=0.8 / calf=-1.5 the wheel centres sit almost
+       exactly under the hips and the base rides ~0.41 m above the ground:
+         h = 0.213*cos(0.8) + 0.2264*cos(-0.7) + 0.086 = 0.408 m -->
+  <xacro:property name="stance_hip"   value="0.0"/>
+  <xacro:property name="stance_thigh" value="0.8"/>
+  <xacro:property name="stance_calf"  value="-1.5"/>
+
+  <!-- Torque applied before leg_controller takes over. Deliberately ZERO.
+       An open-loop constant torque cannot hold a pose: the stance is an
+       unstable equilibrium, so any deviation grows. Seeding the measured
+       gravity-hold values (hip 5.0 / thigh 0.4 / calf 6.0 N.m) was tried and
+       drove every joint hard into a limit within a few seconds, leaving the
+       legs splayed at hip +1.0472 and calf -0.8378 with the body on the floor.
+       magi_sim.launch.py instead holds the simulation paused until the
+       controllers are active, so no physics runs while the legs are limp and
+       this value never gets the chance to matter. -->
+  <xacro:property name="hold_hip"   value="0.0"/>
+  <xacro:property name="hold_thigh" value="0.0"/>
+  <xacro:property name="hold_calf"  value="0.0"/>
+
+  <!-- Effort-commanded leg joint. joint_trajectory_controller requires both
+       position and velocity state interfaces to drive an effort command. -->
+  <xacro:macro name="magi_leg_joint" params="name effort_limit initial hold">
+    <joint name="${name}">
+      <command_interface name="effort">
+        <param name="min">-${effort_limit}</param>
+        <param name="max">${effort_limit}</param>
+      </command_interface>
+      <state_interface name="position">
+        <param name="initial_value">${initial}</param>
+      </state_interface>
+      <state_interface name="velocity"/>
+      <state_interface name="effort">
+        <param name="initial_value">${hold}</param>
+      </state_interface>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="magi_wheel_joint" params="name max_vel:=30.1">
+    <joint name="${name}">
+      <command_interface name="velocity">
+        <param name="min">-${max_vel}</param>
+        <param name="max">${max_vel}</param>
+      </command_interface>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+      <state_interface name="effort"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- One leg = hip + thigh + calf (effort) and the wheel (velocity).
+       Effort limits are the URDF joint limits: 23.7 N.m for hip and thigh,
+       35.55 N.m for the calf. -->
+  <xacro:macro name="magi_leg" params="prefix">
+    <xacro:magi_leg_joint name="${prefix}_hip_joint"   effort_limit="23.7"
+                          initial="${stance_hip}"   hold="${hold_hip}"/>
+    <xacro:magi_leg_joint name="${prefix}_thigh_joint" effort_limit="23.7"
+                          initial="${stance_thigh}" hold="${hold_thigh}"/>
+    <xacro:magi_leg_joint name="${prefix}_calf_joint"  effort_limit="35.55"
+                          initial="${stance_calf}"  hold="${hold_calf}"/>
+    <xacro:magi_wheel_joint name="${prefix}_foot_joint"/>
+  </xacro:macro>
+
+  <xacro:macro name="magi_ros2_control" params="name:=MagiGo2WSystem">
+    <ros2_control name="${name}" type="system">
+      <hardware>
+        <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+      </hardware>
+
+      <xacro:magi_leg prefix="FL"/>
+      <xacro:magi_leg prefix="FR"/>
+      <xacro:magi_leg prefix="RL"/>
+      <xacro:magi_leg prefix="RR"/>
+
+      <sensor name="imu_sensor">
+        <state_interface name="orientation.x"/>
+        <state_interface name="orientation.y"/>
+        <state_interface name="orientation.z"/>
+        <state_interface name="orientation.w"/>
+        <state_interface name="angular_velocity.x"/>
+        <state_interface name="angular_velocity.y"/>
+        <state_interface name="angular_velocity.z"/>
+        <state_interface name="linear_acceleration.x"/>
+        <state_interface name="linear_acceleration.y"/>
+        <state_interface name="linear_acceleration.z"/>
+      </sensor>
+    </ros2_control>
+  </xacro:macro>
+
+</robot>

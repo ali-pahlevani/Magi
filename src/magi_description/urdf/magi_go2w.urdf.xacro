@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!--
+  Top-level description for the MAGI Go2W.
+
+  Composition:
+    go2w_body.xacro        links/joints/inertials (derived from upstream)
+    livox_mid360.xacro     MID-360 LiDAR mounted off the IMU frame
+    go2w_ros2_control.xacro  <ros2_control> interfaces (sim only)
+    go2w_gazebo.xacro      gz_ros2_control plugin, IMU sensor, contact surfaces
+
+  Set sim_gazebo:=false to get a plain description for RViz / TF only.
+-->
+<robot name="magi_go2w" xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <!-- Emit the ros2_control + Gazebo blocks (off for a pure-viz description). -->
+  <xacro:arg name="sim_gazebo" default="true"/>
+  <!-- controller_manager parameters, loaded by the Gazebo system plugin. -->
+  <xacro:arg name="controllers_file"
+             default="$(find magi_control)/config/magi_controllers.yaml"/>
+
+  <xacro:include filename="$(find magi_description)/urdf/go2w_body.xacro"/>
+
+  <xacro:include filename="$(find magi_description)/urdf/livox_mid360.xacro"/>
+  <xacro:livox_mid360 parent="imu" name="livox_mid360"/>
+
+  <xacro:include filename="$(find magi_description)/urdf/go2w_sensors.xacro"/>
+  <xacro:magi_front_camera_link parent="base"/>
+
+  <xacro:include filename="$(find magi_description)/urdf/go2w_ros2_control.xacro"/>
+  <xacro:include filename="$(find magi_description)/urdf/go2w_gazebo.xacro"/>
+
+  <xacro:if value="$(arg sim_gazebo)">
+    <xacro:magi_ros2_control name="MagiGo2WSystem"/>
+    <xacro:magi_gazebo controllers_file="$(arg controllers_file)"/>
+    <xacro:magi_sensors/>
+  </xacro:if>
+
+</robot>

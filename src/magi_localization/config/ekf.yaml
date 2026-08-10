@@ -1,0 +1,125 @@
+# robot_localization EKF for the MAGI Go2W.
+#
+# Produces the odom -> base transform. diff_drive_controller is told NOT to
+# publish that transform (enable_odom_tf: false in magi_controllers.yaml) so
+# there is exactly one publisher of it.
+#
+# ---------------------------------------------------------------------------
+# What is fused, and why so little
+# ---------------------------------------------------------------------------
+# The one thing this filter exists to fix is heading. All four wheels are fixed
+# and non-steerable, so every turn scrubs them sideways, and wheel odometry
+# cannot see that scrub: it infers yaw purely from the wheel speed difference
+# and therefore OVER-READS yaw badly. Measured on flat ground, a commanded
+# 0.5 rad/s spin gives 0.39 rad/s of real rotation while the encoders imply the
+# full 0.5. Feeding that yaw into the filter would be worse than useless.
+#
+# So:
+#   odom0  contributes vx ONLY. Not yaw, not yaw rate, not vy.
+#   imu0   contributes roll/pitch (gravity-referenced, genuinely observable)
+#          and all three angular rates, including yaw rate.
+#
+# Yaw is therefore integrated from the gyro and has no absolute reference,
+# exactly as on the real robot -- the Go2's IMU is 6-axis with no magnetometer.
+# It will drift slowly. That is correct and expected: the odom frame is a
+# smooth, locally-accurate, drifting frame by definition, and SLAM supplies
+# map -> odom to correct it in Phase 3.
+#
+# vy is deliberately not fused. A differential-drive filter often fuses vy = 0
+# as a non-holonomic constraint, but this is a SKID-steer: lateral slip is real
+# and large during turns, so asserting vy = 0 would inject a lie.
+#
+# z is not observable here (no vz or az fused), so it stays near its initial
+# value while its covariance grows. On terrain the robot climbs several metres
+# and odom will not reflect that; the error lands in map -> odom once SLAM is
+# running. two_d_mode stays false so the roll/pitch that the IMU genuinely
+# measures is not thrown away.
+
+ekf_filter_node:
+  ros__parameters:
+    use_sim_time: true
+    frequency: 50.0
+    sensor_timeout: 0.2
+    two_d_mode: false
+    publish_tf: true
+    print_diagnostics: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base
+    world_frame: odom
+
+    # ---- wheel odometry: linear speed only -------------------------------
+    odom0: /wheel_controller/odom
+    #              x      y      z
+    #              roll   pitch  yaw
+    #              vx     vy     vz
+    #              vroll  vpitch vyaw
+    #              ax     ay     az
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_queue_size: 10
+    odom0_differential: false
+    odom0_relative: false
+
+    # ---- IMU: attitude and angular rates ---------------------------------
+    # /imu/data, not /imu/data_raw: the raw bridge output has all-zero
+    # covariances, which this filter would read as infinite confidence.
+    # magi_imu_covariance stamps the real noise variances on.
+    imu0: /imu/data
+    imu0_config: [false, false, false,
+                  true,  true,  false,
+                  false, false, false,
+                  true,  true,  true,
+                  false, false, false]
+    imu0_queue_size: 20
+    imu0_differential: false
+    imu0_relative: false
+    imu0_remove_gravitational_acceleration: true
+
+    # ---- leg kinematics: vertical velocity -------------------------------
+    # This is what makes the vertical channel observable at all. Accelerometers
+    # cannot do it: with no z or vz measurement, fusing az just double-integrates
+    # the bias, which on this robot produced -108 m of z in 40 s while it sat
+    # completely still. Each loaded wheel is a known point touching a surface,
+    # so body height above that surface -- and hence its rate of change -- comes
+    # straight out of forward kinematics.
+    #
+    # vz here is relative to the TERRAIN. Level ground makes that true vertical
+    # velocity; climbing a slope at constant ride height it reads zero while the
+    # robot really is rising, so odom still cannot track absolute elevation.
+    # That needs SLAM. What this does buy is a measured vertical channel, so z
+    # follows real body motion (crouching, bobbing) and its error is a slow
+    # random walk rather than an unbounded quadratic divergence.
+    twist0: /magi/leg_twist
+    twist0_config: [false, false, false,
+                    false, false, false,
+                    false, false, true,
+                    false, false, false,
+                    false, false, false]
+    twist0_queue_size: 10
+    twist0_differential: false
+    twist0_relative: false
+
+    # robot_localization defaults; the diagonal is what matters. Yaw process
+    # noise is left generous because yaw is gyro-integrated and expected to
+    # wander.
+    process_noise_covariance: [
+      0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025, 0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025, 0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
+      0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015]
