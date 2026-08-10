@@ -1,4 +1,4 @@
-# MAGI — Unitree Go2W in the Rubicon world
+# MAGI: Unitree Go2W in the Rubicon world
 
 ROS 2 Humble + Gazebo Sim (Harmonic) simulation of the Unitree Go2W, a wheeled
 quadruped with 16 actuated joints (12 leg joints + 4 drive wheels), driving
