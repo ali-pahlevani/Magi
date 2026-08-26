@@ -1,5 +1,7 @@
 # MAGI: Unitree Go2W in the Rubicon world
 
+![Magi Banner](https://github.com/user-attachments/assets/fcbf9410-ab91-45f4-a014-9caf661a094b)
+
 ROS 2 Humble + Gazebo Sim (Harmonic) simulation of the Unitree Go2W, a wheeled
 quadruped with 16 actuated joints (12 leg joints + 4 drive wheels), driving
 around the Rubicon terrain. Control is `ros2_control`-based and the robot is
