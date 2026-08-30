@@ -355,9 +355,12 @@ class MagiStabilizer(Node):
 
         # ---- terrain preview -----------------------------------------------
         p("preview_enable", True)
-        p("preview_near", 0.45)       # m ahead, start of the window
-        p("preview_far", 1.80)        # m ahead, end of the window
-        p("preview_half_width", 0.45)
+        # The lowest ray reaches the ground 2.69 m out, so the window sits
+        # there rather than just ahead of the feet. See the terrain-preview
+        # notes in magi_stabilizer.yaml.
+        p("preview_near", 2.60)       # m ahead, start of the window
+        p("preview_far", 5.40)        # m ahead, end of the window
+        p("preview_half_width", 0.80)
         p("preview_tau", 0.30)
         p("preview_rough_ref", 0.045)  # m RMS of plane residual = fully rough
         p("preview_rough_floor", 0.020)  # m, the lidar's own range noise
@@ -553,10 +556,9 @@ class MagiStabilizer(Node):
         if xyz.shape[0] < 50:
             return
 
-        # lidar -> base: fixed mount, (0.161, 0, 0.123) with 13 deg of downward
-        # pitch (checked against TF).
-        r = ry(0.227)
-        xyz = xyz @ r.T + np.array([0.161, 0.0, 0.123])
+        # lidar -> base: fixed mount, (0.232, 0, 0.104) with 0.08 rad (4.58
+        # deg) of downward pitch (checked against TF).
+        xyz = xyz @ ry(0.08).T + np.array([0.232, 0.0, 0.104])
 
         near = float(self.get_parameter("preview_near").value)
         far = float(self.get_parameter("preview_far").value)
@@ -564,18 +566,23 @@ class MagiStabilizer(Node):
         # Look where the robot is going; reversing needs the window behind it.
         ahead = -1.0 if self.v_out < -0.05 else 1.0
         x = xyz[:, 0] * ahead
+        # z band, in base frame. Sized for the window's reach: at 5.4 m out
+        # even a 10 deg grade is 0.95 m of rise or fall, and clipping that
+        # would flatten exactly the slope worth previewing.
         sel = ((x > near) & (x < far) & (np.abs(xyz[:, 1]) < half)
-               & (xyz[:, 2] > -1.0) & (xyz[:, 2] < 0.35))
+               & (xyz[:, 2] > -1.50) & (xyz[:, 2] < 1.10))
         window = xyz[sel]
         if window.shape[0] < 40:
             return
 
-        # The MID-360 only looks 7 deg below its own horizon and sits ~0.52 m
-        # up, so even with the 13 deg downward mount the ground first appears
-        # well over a metre out. A window that catches only a thin band of it
-        # makes an ill-conditioned plane fit, which comes back as tens of
-        # degrees of imaginary slope. Require real extent in both axes.
-        if np.ptp(window[:, 0]) < 0.35 or np.ptp(window[:, 1]) < 0.25:
+        # The MID-360 only looks 7 deg below its own horizon and sits ~0.50 m
+        # up; the 4.58 deg downward mount puts the lowest ray 11.58 deg down,
+        # so the ground first appears 2.69 m out and four rings (2.69, 3.18,
+        # 3.92, 5.13 m) fall inside the window, ~200 points. A window that
+        # catches only a thin band of them makes an ill-conditioned plane fit,
+        # which comes back as tens of degrees of imaginary slope. Require real
+        # extent in both axes.
+        if np.ptp(window[:, 0]) < 0.80 or np.ptp(window[:, 1]) < 0.50:
             return
 
         # Least-squares plane z = c0 + c1 x + c2 y over the window.

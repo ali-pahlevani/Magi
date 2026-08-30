@@ -2,16 +2,16 @@
 <robot xmlns:xacro="http://ros.org/wiki/xacro">
 
   <!-- 
-    Livox MID-360 LiDAR Macro for go2w_description
+    Livox MID-360 LiDAR Macro for magi_description
     
-    Based on official Unitree Go2 MID-360 mounting specifications:
-    - Position in IMU frame: (0.1870, 0, 0.0803) meters
-    - Rotation: 13° around Y-axis (0.2269 radians)
+    Mount, in the IMU frame:
+    - Position: (0.2580, 0, 0.0613) meters
+    - Rotation: 0.08 rad (4.58 deg) of downward pitch about Y.
     
     NOTE: This macro uses the accurate MID-360 mesh (mid-360.dae).
     
     Usage:
-      <xacro:include filename="$(find go2w_description)/urdf/livox_mid360.xacro"/>
+      <xacro:include filename="$(find magi_description)/urdf/livox_mid360.xacro"/>
       <xacro:livox_mid360 parent="imu" name="livox_mid360"/>
   -->
 
@@ -51,13 +51,16 @@
     <joint name="${name}_base_joint" type="fixed">
       <parent link="${parent}"/>
       <child link="${name}_base"/>
-      <!-- 
-        Official Unitree Go2 MID-360 transform from IMU frame:
-        - Translation: (0.1870, 0, 0.0803) meters
-        - Rotation: 13° around Y-axis (pitch)
-        - This matches the transformation matrix from documentation
+      <!--
+        Transform from the IMU frame:
+        - Translation: (0.2580, 0, 0.0613) meters, further forward and
+          lower than the stock Go2 mount (0.1870, 0, 0.0803).
+        - Rotation: 0.08 rad (4.58 deg) of downward pitch, against the stock
+          mount's 13 deg. With the -7..+52 deg vertical FOV that puts the
+          lowest ray 11.58 deg below horizontal, so the ground first appears
+          about 2.7 m ahead of base at the nominal 0.40 m ride height.
       -->
-      <origin xyz="0.1870 0 0.0803" rpy="0 0.2269 0"/>
+      <origin xyz="0.2580 0 0.0613" rpy="0 0.08 0"/>
     </joint>
 
     <!-- LiDAR Optical Frame (sensor frame for point cloud) -->

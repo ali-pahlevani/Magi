@@ -236,11 +236,21 @@ magi_stabilizer:
     # A plane fit to the lidar returns ahead of the robot. Widening takes
     # ~0.2 s at the rate limit and crouching longer, and a bump met at 1 m/s
     # arrives with no warning at all from the IMU -- which only ever reports
-    # terrain the robot has already hit. The lidar sees it 1.5 s out.
+    # terrain the robot has already hit. The lidar sees it well ahead of that.
+    #
+    # The window has to sit where the ground actually is. The MID-360 is
+    # mounted 0.232 m forward and 0.104 m above base with 0.08 rad (4.58 deg)
+    # of downward pitch, and it only looks 7 deg below its own horizon, so
+    # from 0.504 m up the lowest ray is 11.58 deg down and first reaches the
+    # ground 2.69 m out; the next rings land at 3.18, 3.92 and 5.13 m.
+    # 2.6-5.4 m therefore catches four ground rings (~200 points), which fits
+    # a well-conditioned plane. Note this is still terrain several metres
+    # ahead rather than the ~1.5 s of lead the original close window assumed,
+    # so the preview anticipates earlier than the gains below were tuned for.
     preview_enable: true
-    preview_near: 0.45
-    preview_far: 1.80
-    preview_half_width: 0.45
+    preview_near: 2.60
+    preview_far: 5.40
+    preview_half_width: 0.80
     preview_tau: 0.30
     preview_rough_ref: 0.045
     # The datasheet range precision, removed in quadrature. Without it a plane

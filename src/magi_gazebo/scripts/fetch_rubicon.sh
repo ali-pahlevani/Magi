@@ -6,6 +6,14 @@
 #
 #   src/magi_gazebo/scripts/fetch_rubicon.sh
 #
+# Keep this directory to the Fuel archive's own contents. magi_gazebo installs
+# models/ and ament_cmake_symlink_install globs it with FILE GLOB_RECURSE, which
+# follows symlinks (CMP0009 is unset inside the generated cmake_install.cmake,
+# and a cmake_policy call in CMakeLists.txt does not reach it). A stray colcon
+# build/ install/ log/ left in here by running `colcon build` from this
+# directory puts log/latest -> latest_build in the glob's path and every
+# --symlink-install build then prints a CMP0009 warning.
+#
 # Why the patch: the upstream model declares the terrain heightmap collision
 # with no <surface> block at all, so it falls back to Gazebo's default contact
 # friction. Measured in this workspace, driving the Go2W across the terrain went

@@ -69,9 +69,10 @@ rtabmap:
     Icp/Epsilon: "0.001"
     Icp/CorrespondenceRatio: "0.2"
     Icp/MaxTranslation: "3.0"
-    # The lidar sits ~0.12 m above base with a -7..+52 deg vertical FOV, so it
-    # mostly looks outward and up rather than at the robot. This trims any
-    # residual self-returns off the legs and head regardless.
+    # The lidar sits ~0.10 m above base, 0.23 m forward, with a -7..+52 deg
+    # vertical FOV and 4.58 deg of downward pitch, so it looks outward and up
+    # rather than at the robot. This trims any residual self-returns off the
+    # legs and head regardless.
     Icp/RangeMin: "0.6"
 
     # ---- graph / memory ------------------------------------------------
