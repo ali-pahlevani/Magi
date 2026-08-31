@@ -7,17 +7,27 @@
 # radius" (splaying the hips leans the wheels, which moves the contact 19 mm
 # further out again at full splay -- free track the old node did not count):
 #
-#   stance                  half-track   h_com   tip angle   lateral accel
-#   nominal 0.40 / 0.380      0.1901    0.3111     31.4 deg     5.99 m/s^2
-#   old widen_max 0.070       0.2727    0.3124     41.1 deg     8.56 m/s^2
-#   widen_max 0.110 (here)    0.3192    0.3124     45.6 deg    10.02 m/s^2
-#   widen 0.110 + crouch      0.3249    0.2476     52.7 deg    12.87 m/s^2
+#   stance                    half-track   h_com   tip angle   lateral accel
+#   nominal, ride 0.36          0.1901    0.2711     35.0 deg     6.88 m/s^2
+#   widen_max 0.070 (here)      0.2727    0.2724     45.0 deg     9.82 m/s^2
+#   widen 0.070 + full crouch   0.2784    0.2224     51.4 deg    12.28 m/s^2
 #
-# The last row needs 23 deg of hip against a 60 deg limit, so none of this is
-# near the mechanism's edge -- the old configuration simply did not ask for it.
-# Widening is the lever to lean on because it costs NO ground clearance;
-# crouching buys the last 7 deg but spends clearance, which on Rubicon has
-# already been measured to be the more expensive currency (see crouch_max).
+# And the axis the table used to leave out, because there is no lever for it:
+#
+#   nose-up, ride 0.36        atan(0.1934 / 0.2711) = 35.5 deg
+#
+# Past that the centre of mass is behind the rear contacts and the robot goes
+# over its own tail. Widening does nothing for it and the wheelbase is fixed,
+# so the only answer is the rear-up guard further down.
+#
+# WHY THE STANCE IS NARROWER THAN IT USED TO BE
+#
+# The previous configuration ran ride 0.40 with widen_max 0.110, reaching
+# 45.6 deg of roll tipping angle by splaying to a 0.600 m track. Taking 40 mm
+# off the ride height instead reaches 45.0 deg at a 0.520 m track -- the same
+# stability, bought once and permanently rather than borrowed under load, and
+# without cambering the wheels 24 deg to get it. Measured, that is not a wash
+# but a clear gain: see widen_max, and Measured behaviour in the README.
 #
 # THE THREE TIME SCALES
 #
@@ -25,11 +35,13 @@
 #              envelope. Nothing else in the stack does this, and it is what
 #              makes commanded-motion rollovers essentially impossible.
 #   fast       body tilt through differential leg length, 100 Hz. Rejects
-#              terrain. Rate damping runs undelayed; only the P+I path is
-#              filtered.
-#   slow       stance width and ride height. Asymmetric: 0.60 m/s going wide,
-#              0.10 m/s coming back, because scrubbing the wheels is worth it
-#              instantly to avoid a rollover and not at all to look tidy.
+#              terrain, and is low-passed as a whole -- see roll_kd for what
+#              happened when the rate term was left unfiltered.
+#   slow       stance width and ride height. Asymmetric: 0.30 m/s going wide,
+#              0.20 m/s coming back, because scrubbing the wheels is worth it
+#              quickly to avoid a rollover and not at all to look tidy. Both
+#              fade out below walking pace, where the hips cannot drag a loaded
+#              wheel sideways at all (see reshape_roll_speed).
 
 magi_stabilizer:
   ros__parameters:
@@ -168,7 +180,13 @@ magi_stabilizer:
     # lateral impulse threw the robot on Rubicon every time. 0.30 still reaches
     # full width in 0.37 s, against 1.8 s for the old node's symmetric 0.12.
     reshape_rate_up: 0.30
-    reshape_rate_down: 0.10
+    # 0.20, not 0.10. Coming back in used to take 1.1 s of lever travel on top
+    # of ~1.2 s of urgency decay, so the stance never finished recovering
+    # between two terrain events and simply lived at its limit. The asymmetry
+    # is still there and still deliberate; it is just no longer a ratchet. Safe
+    # now that reshape_roll_speed below stops it being attempted at rest, where
+    # narrowing is friction-locked anyway.
+    reshape_rate_down: 0.20
     # The width lever only exists while the wheels are turning. Dragging four
     # loaded wheels sideways costs mu*N through the stance height -- 17.3 N.m
     # at the hip -- plus the splay moment, against a 23.7 N.m hip limit, so at
@@ -193,7 +211,23 @@ magi_stabilizer:
     # "urgent", sat half-splayed doing nothing useful, and hunted.
     margin_target: 0.25
     margin_tau: 0.20
-    speed_calm: 0.25
+    # 0.80 and 1.50, not 0.25 and 0.70/1.20. "Widen when moving fast" is sound
+    # and this was the term that made the robot splay ALL THE TIME: at 0.25 to
+    # 1.20 a perfectly ordinary 1.0 m/s put u_speed at 0.79, so on FLAT GROUND,
+    # with nothing wrong, the robot drove with its track at 0.554 m against a
+    # 0.380 m nominal and its body 7 cm below its ride height. Measured, and
+    # reproducible either way round:
+    #
+    #                       track     ride     urgency
+    #   0.25 / 1.20         0.554    0.290       0.79
+    #   0.80 / 1.50         0.443    0.346       0.29
+    #
+    # at an identical 0.97 m/s of ground speed. Widening belongs at the top of
+    # the speed range, not at a walking pace -- and the anticipation it was
+    # standing in for is better done by u_cmd, which compares the commanded
+    # lateral demand against the measured envelope, and measures 0.00 mean
+    # because the governor never lets a turn get near the limit.
+    speed_calm: 0.80
     # 1.20, not 0.70. "Go wide when moving fast" is sound, but 0.70 m/s is not
     # fast for this machine and the term alone held the stance at full splay
     # for any useful speed. Splaying is not free: at 0.110 m of widen the hips
@@ -204,7 +238,7 @@ magi_stabilizer:
     # measured correctly (it was pinned at its floor by a sign error), the
     # governor is what protects a fast turn, and the stance can stay narrow
     # until the speed genuinely warrants it.
-    speed_wide: 1.20
+    speed_wide: 1.50
     # 0.90 rad/s of body-rate RMS, not 0.35. This term feeds BOTH the stance
     # width and the governor's speed ceiling, so saturating it costs speed
     # twice over -- and 0.35 saturates on ordinary Rubicon at any useful pace.
@@ -217,7 +251,27 @@ magi_stabilizer:
     # Residual gyro noise after gyro_tau, removed in quadrature so a motionless
     # robot reports zero roughness instead of its own noise floor.
     rough_floor: 0.080
-    widen_max: 0.110
+    # 0.070, not 0.110. The wide stance was not paying for itself. Splaying to
+    # 0.110 cambers the wheels ~24 deg and rolls them onto their rim edges, and
+    # measured over the standard course that cost more contact than the extra
+    # geometric tipping angle bought:
+    #
+    #                          widen 0.110    widen 0.070
+    #   track, median              0.482 m        0.466 m
+    #   track above 0.55 m            34 %            0 %
+    #   fewer than three feet         16 %            9 %
+    #   tip margin, median          31.3 deg       35.6 deg
+    #   ground covered per run      2.46 m         2.92 m
+    #
+    # Every column moves the right way, including the two that were supposed to
+    # be the reason for splaying in the first place. Less camber means the
+    # wheels stay on the ground, and a support pattern that keeps four contacts
+    # beats a wider one that keeps three.
+    #
+    # It costs less than it looks on paper, too, because ride_height already
+    # banked most of it: at h_com 0.271 the nominal stance tips at 35.0 deg and
+    # widen 0.070 takes that to 45.2 deg, against 49.7 deg at 0.110.
+    widen_max: 0.070
     # 0.090, and gated on smoothness. Crouching is the only lever that costs
     # ground clearance, and the cost has been measured: the old node at
     # crouch_max 0.10 reached 0.30 m ride height on Rubicon, grounded out, and
@@ -225,7 +279,15 @@ magi_stabilizer:
     # covered 0.3 m in 10 s of commanded driving. So the crouch is available in
     # full on smooth ground, where it buys cornering stability and nothing is
     # going to hit the belly, and withdrawn as the terrain roughens.
-    crouch_max: 0.090
+    # 0.050, not 0.090. Stacked on the 0.36 ride height this used to put the
+    # body at 0.27 m -- measured, the robot spent 26% of a course below 0.32 m
+    # and 9% below 0.30 m, which is the "it gets too low" complaint and is also
+    # where grounding out starts. Most of what the crouch was buying is now
+    # permanent: ride_height came down from 0.40 to 0.36, which is 40 mm of CoM
+    # height taken off the top rather than borrowed under load. 0.050 keeps the
+    # lever without spending clearance the terrain wants. After the change:
+    # 1% of the course below 0.32 m, none below 0.30.
+    crouch_max: 0.050
     crouch_rough_gate: 0.60
     # The opposite lever. With fewer than three feet loaded the legs extend to
     # chase the surface instead of crouching further into it.
@@ -242,7 +304,12 @@ magi_stabilizer:
     # Urgency drives levers that move real mass, and every input to it is noisy.
     # Rise quickly, fall slowly -- the same asymmetry as the rate limits.
     urgency_rise_tau: 0.15
-    urgency_fall_tau: 1.20
+    # 0.80, not 1.20. Rise fast and fall slow is right, but 1.2 s of decay on
+    # top of the reshape rate meant a single contact flicker held the stance
+    # out for well over two seconds, and on this terrain the next flicker
+    # arrives before that finishes. Still four times slower to relax than to
+    # react.
+    urgency_fall_tau: 0.80
 
     dz_max: 0.110
     contact_force: 5.0

@@ -371,7 +371,7 @@ measurements that shaped the design — why the accelerometer cannot be used raw
 as an attitude reference, why contacts have to be held briefly after they go
 light, and why splaying the stance helps even though it cambers the wheels.
 
-#### Five faults that made it crawl, and how each was found
+#### Six faults that made it crawl, and how each was found
 
 Everything above was true of the design and false of the implementation. The
 robot as shipped crossed the terrain at 1.07 m per 8 s run, splayed to its
@@ -415,7 +415,29 @@ terrain's 75th-percentile slope — the robot sat permanently splayed to its
 0.600 m limit and permanently throttled to `v_rough_min`, which was 0.35 m/s.
 That single number was the robot's top speed everywhere on Rubicon.
 
-**5. The stance was friction-locked, and nobody had checked.** Dragging four
+**5. It splayed and crouched almost all the time, and mostly for no reason.**
+Measured over a course, the track sat above 0.50 m (nominal 0.380) for 98% of
+the run and the body below 0.32 m for 69% of it. On *flat ground*, with nothing
+wrong at all, the robot drove at a 0.554 m track with its body 7 cm below its
+ride height — because `u_speed` ramped from a 0.25 m/s "calm" speed, so an
+ordinary 1.0 m/s was already scored 0.79 of maximum urgency. Widening now
+starts at 0.80 m/s and the crouch is halved, since lowering the ride height to
+0.36 already banked most of what the crouch was borrowing:
+
+| on flat, at 0.97 m/s | track | ride height |
+|---|---|---|
+| before | 0.554 m | 0.290 m |
+| after | **0.443 m** | **0.346 m** |
+
+`widen_max` came down from 0.110 to 0.070 in the same pass, and that one is not
+a trade at all — over the course, the narrower stance loses a contact 9% of the
+time against 16%, and its median tip margin is **35.6° against 31.3°**. The
+wider stance was *less* stable: cambering the wheels 24° onto their rim edges
+cost more contact than the extra geometry bought. The stability it was chasing
+comes from the ride height instead, which reaches the same 45° of tipping angle
+at a 0.520 m track rather than a 0.600 m one.
+
+**6. The stance was friction-locked, and nobody had checked.** Dragging four
 loaded wheels sideways costs 17.3 N·m at the hip against a 23.7 N·m limit, so at
 rest the width lever does not exist. Measured at 0.413 rad of splay with the
 target set back to nominal: both front hips **pinned at exactly −23.700 N·m**,

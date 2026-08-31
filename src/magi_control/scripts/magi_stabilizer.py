@@ -76,16 +76,20 @@ Rubicon at speed, for four reasons that this node addresses one by one.
      down to 0.05. Terrain disturbance is a few Hz at most, which is inside
      what the loop can still carry.
 
-Also, the old configuration left most of the robot's stability on the table.
-Measured from the kinematics (see the table in magi_stabilizer.yaml): the
-nominal stance tips at 31.4 deg, the old widen_max 0.070 took that to 41.1 deg,
-and the leg IK comfortably reaches a stance that tips at 45.6 deg without
-losing any ground clearance at all. Splaying was worth measuring rather than
-assuming -- a wide stance cambers the wheels 18 deg and rolls them onto their
-rim edges, which sounded like it should cost more traction than it bought. It
-does not: driven at 0.7 m/s over Rubicon from a fixed pose, three runs each,
-widen_max 0.110 survived 2/3 and covered 2.79 m, 0.070 survived 2/3 and
-covered 2.07 m, and no splay at all survived 0/3 and covered 1.49 m.
+Splaying is worth measuring rather than assuming, and the answer turned out to
+depend on which question you ask. A wide stance raises the geometric tipping
+angle, and it also cambers the wheels and rolls them onto their rim edges. An
+early three-run comparison at a fixed 0.7 m/s said the geometry won. Over the
+full twelve-leg course it does not: at widen_max 0.110 the robot loses a
+contact 16% of the time and its median tip margin is 31.3 deg, and at 0.070 it
+loses one 9% of the time with a median margin of 35.6 deg -- the wider stance
+was measurably LESS stable, because a support pattern that keeps four contacts
+beats a wider one that keeps three.
+
+The stability it was chasing is now bought a cheaper way: 40 mm off the ride
+height reaches the same 45 deg of tipping angle at a 0.520 m track instead of a
+0.600 m one, permanently rather than borrowed under load. See the table at the
+top of magi_stabilizer.yaml.
 
 THE STABILITY MEASURE
 ---------------------
@@ -365,11 +369,11 @@ class MagiStabilizer(Node):
         p("reshape_rest_gain", 0.35)    # fraction of it available at a standstill
         p("widen_band", 0.015)          # m the command may lead the real stance
         p("reshape_rate_up", 0.30)    # m/s toward safety
-        p("reshape_rate_down", 0.10)  # m/s back to nominal
+        p("reshape_rate_down", 0.20)  # m/s back to nominal
         p("margin_target", 0.25)      # rad (14 deg); below this, reshape
         p("margin_tau", 0.20)
-        p("speed_calm", 0.25)         # m/s below which no anticipation
-        p("speed_wide", 1.20)         # m/s at which the stance is fully wide
+        p("speed_calm", 0.80)         # m/s below which no anticipation
+        p("speed_wide", 1.50)         # m/s at which the stance is fully wide
         p("rough_ref", 0.90)          # rad/s RMS body rate = fully wide
         p("rough_tau", 1.0)
         p("rough_floor", 0.080)       # rad/s of residual gyro noise
@@ -377,20 +381,20 @@ class MagiStabilizer(Node):
         # the tipping angle from 31.4 to 43.7 deg, for 26 deg of hip against a
         # 60 deg limit. Widening costs no ground clearance, so it is the lever
         # to lean on.
-        p("widen_max", 0.110)
+        p("widen_max", 0.070)
         # Crouching does cost clearance, and on Rubicon that has already been
         # measured to be dangerous: at 0.10 the old node reached 0.30 m ride
         # height, grounded out, and three feet fell to ~5 N against 191 N of
         # weight. So crouch is GATED ON SMOOTHNESS -- available in full on flat
         # ground where it buys cornering stability, withdrawn over rough ground
         # where clearance matters more.
-        p("crouch_max", 0.090)
+        p("crouch_max", 0.050)
         p("crouch_rough_gate", 0.60)  # fraction of crouch withdrawn when rough
         p("reach_max", 0.050)         # m of extra extension to chase lost contact
         p("reach_rate", 0.06)         # m/s -- slower than the width levers
         p("contact_debounce", 0.35)   # s before a contact change is believed
         p("urgency_rise_tau", 0.15)
-        p("urgency_fall_tau", 1.20)
+        p("urgency_fall_tau", 0.80)
 
         p("dz_max", 0.110)
         p("contact_force", 5.0)
