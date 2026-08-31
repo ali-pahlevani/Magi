@@ -29,6 +29,14 @@ ros2 launch magi_bringup magi_sim.launch.py teleop:=true
 ros2 launch magi_control teleop.launch.py          # or in a second terminal
 ```
 
+To map and then navigate, in that order — the second command needs a map the
+first one saved:
+
+```bash
+ros2 launch magi_launch magi_test.launch.py slam:=true   # drive around, Ctrl-C saves
+ros2 launch magi_launch magi_nav.launch.py               # then click 2D Goal Pose
+```
+
 ### The odometry view
 
 `magi_launch/rviz/magi_odometry.rviz` is laid out to make odometry *checkable*
@@ -64,7 +72,9 @@ rather than after a spell of TF errors. Turn either window off with
 | `magi_control` | Controller YAML, spawners, stance/balance/posture nodes, keyboard teleop |
 | `magi_localization` | EKF + leg odometry + IMU conditioner; owns `odom -> base` |
 | `magi_bringup` | Simulation stack: world, robot, controllers, estimation |
-| `magi_launch` | Runnable configurations. Start here; SLAM and navigation land here too |
+| `magi_slam` | RTAB-Map 3D lidar SLAM, the map saver, map-quality checks |
+| `magi_navigation` | Nav2 on a saved map: costmaps, planner, controller, behaviours |
+| `magi_launch` | Runnable configurations. Start here |
 | `third_party/gz_ros2_control` | Built from source — see below |
 
 `src/unitree_go2w_ros2` and `src/Rubicon_World` are the original inputs. They
@@ -344,6 +354,189 @@ closure, and heading correction is what loop closure provides.
 The map itself builds as intended — 21,297 points in `/cloud_map` and a
 245 × 305 cell occupancy grid at 0.1 m on `/map`, the latter being what Nav2
 will consume in Phase 5.
+
+---
+
+## Navigation (Phase 5)
+
+### Saving the map
+
+RTAB-Map streams its graph into a database as it maps, so the map is on disk
+continuously and quitting **is** the save. `slam.launch.py` points that database
+at its final home from the start rather than at a scratch path that would have
+to be copied afterwards — copying is the thing to avoid, since rtabmap flushes
+on shutdown and anything copying the file while it exits can capture a
+truncated map.
+
+Nav2 cannot read a `.db`, so `magi_map_saver` runs alongside and writes the rest
+when the launch is stopped. Ctrl-C is the whole procedure:
+
+```bash
+ros2 launch magi_launch magi_test.launch.py slam:=true   # drive around, then Ctrl-C
+```
+
+```
+~/magi_maps/rubicon.db      the RTAB-Map graph      -> relocalisation
+~/magi_maps/rubicon.yaml    the 2D grid, + .pgm     -> Nav2's static layer
+~/magi_maps/rubicon.ply     the 3D cloud            -> viewing
+```
+
+`map_name:=<name>` keeps several maps side by side. To snapshot mid-session
+without stopping:
+
+```bash
+ros2 service call /magi_map_saver/save std_srvs/srv/Trigger
+```
+
+Shutdown saving is not the same code path as the service, and it broke where
+the service worked. rclpy's own SIGINT handler tears the context down from
+inside the handler, and the executor's next wait raises `RCLError` —
+"the given context is not valid" — rather than the documented
+`ExternalShutdownException`. Nothing caught it, `main` unwound, and the map was
+never written. The node now declines rclpy's signal handling
+(`SignalHandlerOptions.NO`) and treats shutdown as a flag its spin loop reads,
+so the save runs in ordinary control flow with the context still alive.
+
+### Navigation
+
+```bash
+ros2 launch magi_launch magi_nav.launch.py
+```
+
+Brings up the simulation, RTAB-Map in **localization** mode against the saved
+map, and Nav2. Click **2D Goal Pose** in the RViz toolbar, put an arrow on the
+map, and the robot plans a route and drives there.
+
+There is no AMCL: RTAB-Map owns `map -> odom`, localising against the same graph
+that built the map. Respawning at the map origin makes the initial guess correct
+to within a scan — `map -> odom` comes up at 4 cm. **2D Pose Estimate** feeds
+`/initialpose` to RTAB-Map if localisation is ever lost.
+
+The controller is Regulated Pure Pursuit rather than DWB, and that is not a
+default. DWB rolls out trajectories assuming a commanded twist is the twist the
+robot executes; on this robot it is not, because `magi_stabilizer` sits between
+Nav2 and the wheels and scales commands down for roughness and tipover margin.
+Every DWB rollout would be scored against a motion that did not happen. Pure
+pursuit tracks the path geometrically and re-reads the pose each cycle, so a
+governed command just means the robot is further back along the path next tick.
+
+### This lidar cannot see the ground, and it broke two things
+
+The MID-360 sits 0.46 m above `base_footprint` with a vertical FOV starting at
+−7°, so it looks outward and up. Of the 23,040 returns in one scan on Rubicon:
+
+| | |
+|---|---|
+| within 0.3 m of the foot plane | 363 returns, **1.6%** |
+| within 0.2 m of the foot plane | 219 returns, 1.0% |
+| nearest such return | **1.52 m** away |
+| returns closer than 3 m that are near the ground | 1.3% |
+
+**It made the occupancy grid unusable.** RTAB-Map marks a cell free only when a
+*ground point* lands in it. With almost no ground points, almost nothing was
+free — including the ground the robot was standing on. `Grid/RayTracing: true`
+infers free space from the beams instead of the returns, and fixes it outright.
+Measured against the 88 poses the robot physically occupied on a 28 m run:
+
+| | ray tracing off | on |
+|---|---|---|
+| driven cells marked free | 51% | **100%** |
+| driven cells marked **occupied** | 34% | **0%** |
+| free-space clearance at those cells | 0.10 m | **2.86 m** |
+| largest drivable region (0.38 m robot) | 1.4 m² | **364 m²** |
+
+The robot's own start cell was blocked in its own map; Nav2 could not have
+planned a metre of it, and no costmap tuning would have helped because the fault
+was upstream of the costmap. Checked against the simulator's terrain rather than
+against itself, the old grid carried no information at all: cells it called free
+and cells it called occupied were the same terrain, 72.8% vs 70.9% genuinely
+drivable, median true slope 11.0° vs 10.9°. With ray tracing on, occupied cells
+are real — 90th-percentile true slope 51° against 33° for free ones.
+`Grid/RangeMax` is halved to 10 m at the same time, because ray tracing believes
+a beam that skims a rise, and the further a beam travels the more it can skim.
+
+**It also rules out a live obstacle layer.** A costmap obstacle layer needs
+ground for two things: deciding what is *not* an obstacle, and raytracing free
+space open. Run through `rtabmap_util/obstacles_detection`, every setting tried
+put 99%+ of the cloud in "obstacle" and left the ground cloud empty:
+
+| settings | obstacle pts/scan | ground pts/scan |
+|---|---|---|
+| as first configured (noise filter) | 5 | 0 |
+| no noise filter | 1379 | 0 |
+| rtabmap defaults | 2615 | 0 |
+| flat-obstacle off, cluster 2 m, 60° | 3459 | 27 |
+| height segmentation, ground below 0.3 m | 3263 | 224 |
+
+Wired into the costmap that produces a robot which marks the terrain around
+itself as a wall, never clears it, and freezes — "RegulatedPurePursuitController
+detected collision ahead" on a cell the saved map calls 100% free, which is
+exactly what happened. So navigation runs on the SLAM map, which is a good map
+of a static world, and `local_obstacles:=true` adds the live layer back for
+anyone who changes the sensor.
+
+The first row of that table is worth its own warning: `Grid/NoiseFilteringRadius`
+was set to 0.05 m on a cloud already voxel-filtered to 0.1 m. A radius smaller
+than the voxel has no neighbours to count, so every point failed the test and
+the node emitted an empty cloud — silently. No warning, no error, just a costmap
+that stopped updating.
+
+### A 2D map cannot say "too steep", so the saver adds it
+
+With the grid fixed, Nav2 planned a clean 4 m path across ground the map
+correctly showed as empty, the robot drove into it, and rolled onto its side. An
+occupancy grid can say *something is here*; it cannot say *the ground here tilts
+30°*. On Rubicon that is the whole problem.
+
+The information was never missing, only unused — it is in the 3D cloud the same
+graph produced. `magi_map_saver` takes the lowest return in each cell as the
+ground, fits the local gradient over a footprint-sized window, and marks
+anything above a limit as an obstacle.
+
+It is a rough signal, and worth being plain about that: correlation 0.54 against
+the simulator's own heightmap, median error +1.8°, 90th-percentile absolute
+error 21°. The lidar sees little ground, so cells are sparsely sampled and a
+single return sitting on a rock reads as terrain.
+
+So the threshold is **calibrated, not derived**. Five separate runs put this
+robot on its side; each candidate limit was scored against those five sites and
+against the poses the robot drove without falling:
+
+| limit / window | occupied | driven path drivable | largest region | tip sites blocked |
+|---|---|---|---|---|
+| none (`slope_layer:=false`) | 2.5% | 94.9% | 313 m² | **0 of 5** |
+| 25° / 1.0 m | 29.2% | 67.9% | 66 m² | 5 of 5 |
+| 30° / 1.0 m | 25.2% | 69.2% | 84 m² | 3 of 5 |
+| **35° / 1.5 m** | 19.3% | 69.2% | **138 m²** | **4 of 5** |
+| 40° / 1.5 m | 15.9% | 69.2% | 179 m² | 4 of 5 |
+
+The first row is the case for having the layer at all: with the grid as
+RTAB-Map projects it, *not one* of the five places that rolled the robot is
+marked. The rest is the cost — it blocks real ground, and the connected
+drivable region shrinks. 35° over a 1.5 m window buys four of the five sites for
+twice the area of the strictest setting. Note that 35° is a smoothed, sparsely
+sampled estimate and not the angle the robot tips at, which is nearer 25°; the
+number is where it is because that is where it scored best.
+
+### Measured: does it navigate?
+
+Fourteen goals sent as `/goal_pose`, the way the RViz button sends them, on a
+map built by driving 30 m and stopping the launch:
+
+| | |
+|---|---|
+| goals reached | **10 of 14** |
+| one uninterrupted sequence | **6 of 6**, robot upright at the end |
+| typical goal | 3–7 m, reached in 7–26 s |
+| planning failures | **0** |
+| localisation failures | **0** |
+| `map -> odom` at startup | 4 cm |
+
+Every failure was the robot tipping or wedging on terrain, never a planner or a
+localiser fault — the same 62%-upright ceiling the mobility course measures.
+Once the robot is on its side nothing recovers: it has no self-righting, its
+`base_footprint` ends up somewhere meaningless, and Nav2 spends the rest of the
+session reporting collisions that are really a fallen robot.
 
 ---
 
@@ -647,6 +840,23 @@ The cylinder removed that failure mode outright, which is why the angular limit
 is 1.5 rad/s rather than the 0.6 the mesh forced.
 
 ## Known limitations
+
+**Navigation ends where the robot falls over.** Ten of fourteen goals were
+reached, and all four failures were the robot tipping or wedging on terrain —
+never a planning or localisation fault. There is no self-righting, so a fallen
+robot ends the session: its `base_footprint` lands somewhere meaningless and
+Nav2 spends the rest of the run reporting collisions that are really a robot on
+its side. The slope layer in the map saver blocks four of the five sites that
+actually caused this, which is a real improvement over the zero the raw
+occupancy grid blocked, but it is a rough estimate and not a guarantee.
+
+**Nothing sees an obstacle that is not in the map.** The live costmap obstacle
+layer is off by default because this lidar returns 1.6% of its scan from ground
+level, which is too little to raytrace free space open — see
+[Navigation](#navigation-phase-5). The world is static and fully mapped, so this
+costs nothing here and would cost everything on a robot sharing space with
+anything that moves. Fixing it properly means a traversability estimator, not a
+costmap parameter.
 
 **Yaw authority is ~78% on flat, ~47% on terrain.** All four wheels are fixed
 and non-steerable, so every turn scrubs them sideways. This also means

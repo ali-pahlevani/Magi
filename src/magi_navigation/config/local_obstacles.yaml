@@ -1,0 +1,21 @@
+# Overlay that adds the live obstacle layer to both costmaps.
+#
+# Loaded after nav2.yaml when local_obstacles:=true. It changes nothing but the
+# two `plugins` lists: the layer's own configuration lives in nav2.yaml, where
+# it can be read alongside everything else, and is simply inert while the layer
+# is not in the list.
+#
+# Read the header of nav2.yaml before turning this on. On the robot as it
+# stands the layer marks the terrain around the robot as a wall and never
+# clears it, because the lidar returns almost nothing from ground level and a
+# costmap obstacle layer needs ground returns to raytrace free space open.
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]

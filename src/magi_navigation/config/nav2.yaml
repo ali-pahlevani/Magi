@@ -1,0 +1,390 @@
+# Nav2 for the MAGI Go2W on Rubicon.
+#
+# ===========================================================================
+# What is different here, and why
+# ===========================================================================
+#
+# THERE IS NO AMCL. RTAB-Map owns `map -> odom`, in localization mode, against
+# the same graph that built the map. AMCL would be a second publisher of that
+# transform, which is the silent-failure class this repo keeps running into:
+# nothing errors, the robot just teleports between two opinions of where it is.
+# nav2_amcl is therefore absent from every node list below, on purpose.
+#
+# THE BASE FRAME IS base_footprint, NOT base. `base` rides a whole stance
+# height off the floor, and a 2D costmap anchored there measures every obstacle
+# from chest level. base_footprint is on the ground where planar reasoning
+# belongs. See the note in magi_go2w.urdf.xacro.
+#
+# THERE IS NO LIVE OBSTACLE LAYER BY DEFAULT, AND THAT IS A MEASUREMENT, NOT A
+# SHORTCUT. This lidar cannot see the ground it is driving on. The MID-360 sits
+# 0.46 m above base_footprint with a vertical FOV that starts at -7 deg, so it
+# looks outward and up. Of the 23,040 returns in one scan on Rubicon:
+#
+#   within 0.3 m of the foot plane                 363 returns   1.6%
+#   within 0.2 m of the foot plane                 219 returns   1.0%
+#   nearest return within 0.2 m of the foot plane      1.52 m away
+#   returns closer than 3 m that are near the ground          1.3%
+#
+# A costmap obstacle layer needs ground for two things: to decide what is NOT
+# an obstacle, and to raytrace free space open. With 1.6% of the scan on the
+# ground, neither works. Run through rtabmap_util/obstacles_detection -- the
+# same segmentation that built the map -- every setting tried put 99%+ of the
+# cloud in "obstacle" and left the ground cloud empty:
+#
+#   settings                              obstacle pts/scan   ground pts/scan
+#   as first configured (noise filter)                    5                 0
+#   no noise filter                                    1379                 0
+#   rtabmap defaults                                   2615                 0
+#   flat-obstacle off, cluster 2 m, 60 deg             3459                27
+#   height segmentation, ground below 0.3 m            3263               224
+#
+# Wired into the costmap that produces a robot that marks the terrain around
+# itself as a wall, never clears it, and freezes: "RegulatedPurePursuitController
+# detected collision ahead" on a cell the saved map calls 100% free. Which is
+# exactly what happened, and what these numbers were measured to explain.
+#
+# So navigation runs on the SLAM map, which is a good map of a static world
+# (see magi_slam/config/rtabmap.yaml for the ray-tracing change that made it
+# one). local_obstacles:=true adds the live layer back for anyone who changes
+# the sensor or the segmentation; the layer is fully configured below and only
+# absent from the `plugins` lists.
+#
+# THE CONTROLLER IS PURE PURSUIT, NOT DWB. DWB rolls out trajectories on the
+# assumption that a commanded twist is the twist the robot will execute.
+# On this robot it is not: magi_stabilizer sits between Nav2 and the wheels
+# and scales commands down for roughness and tipover margin, and skid-steer
+# scrub eats more on top. Every DWB rollout would be scored against a motion
+# that did not happen. Regulated Pure Pursuit tracks the path geometrically
+# and re-reads the actual pose each cycle, so a command that got governed just
+# means the robot is further back along the path than expected next tick, which
+# is exactly the case pure pursuit is built for.
+
+# ---------------------------------------------------------------------------
+map_server:
+  ros__parameters:
+    use_sim_time: true
+    # Filled in by navigation.launch.py from map_dir + map_name.
+    yaml_filename: ""
+    topic_name: map
+    frame_id: map
+
+# ---------------------------------------------------------------------------
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: /odometry/filtered
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+
+# ---------------------------------------------------------------------------
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    # 10 Hz, not the stock 20. The stabilizer runs its own loop underneath and
+    # the wheels have their own acceleration limits; a faster outer loop buys
+    # nothing here and costs frames in an already busy simulation.
+    controller_frequency: 10.0
+    odom_topic: /odometry/filtered
+    min_x_velocity_threshold: 0.02
+    min_y_velocity_threshold: 0.50      # holonomic-only; effectively disabled
+    min_theta_velocity_threshold: 0.05
+    failure_tolerance: 0.5
+    progress_checker_plugin: progress_checker
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      # Deliberately loose. The stock 0.5 m in 10 s is a reasonable bar for a
+      # robot on a floor; this one is climbing rock, and the stabilizer will
+      # legitimately hold it near a standstill while it recovers stance. At the
+      # stock setting a hard climb reads as "stuck" and Nav2 aborts a goal the
+      # robot was in the middle of achieving.
+      required_movement_radius: 0.4
+      movement_time_allowance: 25.0
+
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      # Also loose, for the same reason: on a slope the robot settles where the
+      # terrain lets it. Tight tolerances turn "arrived" into an endless
+      # shuffle against gravity.
+      xy_goal_tolerance: 0.30
+      yaw_goal_tolerance: 0.50
+      stateful: true
+
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      # 0.7 m/s against a 1.5 m/s wheel limit and a measured 0.98 m/s on flat
+      # ground. The headroom is for the governor: asking for more than the
+      # stabilizer will pass through just means the request is clipped, and
+      # nothing downstream benefits from the difference.
+      desired_linear_vel: 0.7
+      lookahead_dist: 0.9
+      min_lookahead_dist: 0.5
+      max_lookahead_dist: 1.5
+      lookahead_time: 1.5
+      use_velocity_scaled_lookahead_dist: true
+      transform_tolerance: 0.2
+
+      # Skid-steer: no lateral velocity, and it turns on the spot. Reversing is
+      # off because rotate-to-heading requires it off, and rotating in place is
+      # the better move for a robot whose rear-facing perception is the same
+      # 360 deg lidar it drives on.
+      allow_reversing: false
+      use_rotate_to_heading: true
+      rotate_to_heading_min_angle: 0.7
+      rotate_to_heading_angular_vel: 0.8
+      max_angular_accel: 2.0
+
+      # Slow down for tight curvature and for proximity to obstacles. Both
+      # matter more than usual on a robot whose tipover margin is a function of
+      # speed: the stabilizer would otherwise have to claw back the same
+      # velocity that Nav2 keeps asking for.
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: true
+      regulated_linear_scaling_min_radius: 0.9
+      regulated_linear_scaling_min_speed: 0.25
+      inflation_cost_scaling_factor: 3.0
+
+      min_approach_linear_velocity: 0.15
+      approach_velocity_scaling_dist: 1.0
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.5
+
+# ---------------------------------------------------------------------------
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.1
+      # Circumscribes the robot at its widest: hips at +/-0.193 m in x plus the
+      # 0.086 m wheels is 0.28 m of half-length, and the stance controller can
+      # widen the track to about 0.47 m, so 0.24 m of half-width. Kept circular
+      # because a skid-steer robot rotates on the spot and a polygon footprint
+      # would have to be swept through every heading anyway.
+      robot_radius: 0.38
+      # Unknown is drivable in the local window. The static map has holes
+      # wherever the lidar never reached, and treating those as blocked would
+      # stop the robot at the edge of its own map.
+      track_unknown_space: false
+      # obstacle_layer is configured below but deliberately not listed;
+      # local_obstacles:=true adds it. See the header.
+      plugins: ["static_layer", "inflation_layer"]
+
+      # The static layer is in the LOCAL costmap as well as the global one, and
+      # that is not the stock arrangement. Regulated Pure Pursuit checks
+      # collisions against the local costmap only, so anything absent from it
+      # is something the controller will happily drive into. Live perception
+      # cannot carry that alone here: the MID-360's -7 deg lower FOV limit
+      # leaves it blind below ~0.4 m within 2.69 m of the robot, which is
+      # exactly where a rock about to be hit lives. The mapped world is static,
+      # so the map is the reliable half and the live layer is the correction.
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+        subscribe_to_updates: true
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: obstacles ground
+        # Segmented obstacle points from rtabmap_util/obstacles_detection.
+        # The height band is a sanity clamp, not the segmentation: the
+        # ground/slope decision was already made by surface normal upstream.
+        obstacles:
+          topic: /obstacles
+          data_type: "PointCloud2"
+          # The ray origin. Left empty it would default to the cloud's own
+          # frame, which obstacles_detection rewrites to the robot -- putting
+          # every clearing ray's start point 0.46 m from the real sensor.
+          sensor_frame: livox_mid360
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.05
+          max_obstacle_height: 2.0
+          obstacle_max_range: 8.0
+          obstacle_min_range: 0.0
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.0
+          inf_is_valid: false
+        # Clearing only. Obstacle points alone would raytrace open just the
+        # narrow corridors that end at an obstacle, leaving stale marks
+        # everywhere the robot has since driven past.
+        ground:
+          topic: /ground
+          data_type: "PointCloud2"
+          sensor_frame: livox_mid360
+          marking: false
+          clearing: true
+          min_obstacle_height: -2.0
+          max_obstacle_height: 2.0
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.0
+          inf_is_valid: false
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        # 0.55 m against a 0.38 m radius leaves ~0.17 m of buffer. More would
+        # seal off the gaps between boulders that are the only way through
+        # parts of this basin.
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+
+      always_send_full_costmap: true
+
+# ---------------------------------------------------------------------------
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      robot_radius: 0.38
+      resolution: 0.1
+      # True here, unlike the local costmap: the planner is told separately
+      # (allow_unknown) that it may route through unknown space, and keeping
+      # the distinction visible is what makes an unreachable goal legible in
+      # RViz instead of looking like a planner bug.
+      track_unknown_space: true
+      plugins: ["static_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: obstacles ground
+        obstacles:
+          topic: /obstacles
+          data_type: "PointCloud2"
+          sensor_frame: livox_mid360
+          marking: true
+          clearing: true
+          min_obstacle_height: 0.05
+          max_obstacle_height: 2.0
+          obstacle_max_range: 8.0
+          raytrace_max_range: 10.0
+          inf_is_valid: false
+        ground:
+          topic: /ground
+          data_type: "PointCloud2"
+          sensor_frame: livox_mid360
+          marking: false
+          clearing: true
+          min_obstacle_height: -2.0
+          max_obstacle_height: 2.0
+          raytrace_max_range: 10.0
+          inf_is_valid: false
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.55
+        cost_scaling_factor: 3.0
+
+      always_send_full_costmap: true
+
+# ---------------------------------------------------------------------------
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 1.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      # NavFn, not Smac. Smac's Hybrid-A* buys kinematic feasibility for
+      # car-like robots; this one turns on the spot, so there is no constraint
+      # for it to respect and nothing to gain for the cost.
+      tolerance: 0.5
+      use_astar: false
+      # The map is holed wherever the lidar never looked, and a goal on the far
+      # side of a hole is a perfectly reasonable goal. Refusing to route
+      # through unknown space would make most of Rubicon unreachable from most
+      # of the rest of it.
+      allow_unknown: true
+
+# ---------------------------------------------------------------------------
+behavior_server:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: odom
+    robot_base_frame: base_footprint
+    local_frame: odom
+    transform_tolerance: 0.2
+    cycle_frequency: 10.0
+    local_costmap_topic: local_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_costmap_topic: global_costmap/costmap_raw
+    global_footprint_topic: global_costmap/published_footprint
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 0.8
+    min_rotational_vel: 0.3
+    rotational_acc_lim: 2.0

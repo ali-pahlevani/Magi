@@ -12,6 +12,7 @@ install(
   PROGRAMS
     scripts/magi_slam_accuracy.py
     scripts/magi_map_check.py
+    scripts/magi_map_saver.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

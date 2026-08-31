@@ -1,0 +1,307 @@
+Panels:
+- Class: rviz_common/Displays
+  Name: Displays
+  Property Tree Widget:
+    Expanded:
+    - /Global Options1
+    - /Global Costmap1
+    Splitter Ratio: 0.5
+  Tree Height: 660
+- Class: rviz_common/Views
+  Name: Views
+  Splitter Ratio: 0.5
+Visualization Manager:
+  Class: ''
+  Name: root
+  Displays:
+  - Class: rviz_default_plugins/Grid
+    Name: Grid
+    Enabled: true
+    Alpha: 0.4
+    Cell Size: 1
+    Color: 160; 160; 164
+    Line Style:
+      Line Width: 0.03
+      Value: Lines
+    Normal Cell Count: 0
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Plane: XY
+    Plane Cell Count: 80
+    Reference Frame: <Fixed Frame>
+    Value: true
+  - Class: rviz_default_plugins/RobotModel
+    Name: RobotModel
+    Enabled: true
+    Alpha: 1
+    Collision Enabled: false
+    Visual Enabled: true
+    Description File: ''
+    Description Source: Topic
+    Description Topic:
+      Depth: 5
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /robot_description
+    TF Prefix: ''
+    Update Interval: 0
+    Value: true
+    Mass Properties:
+      Inertia: false
+      Mass: false
+  - Class: rviz_default_plugins/TF
+    Name: TF
+    Enabled: false
+    Frame Timeout: 15
+    Marker Scale: 0.8
+    Show Arrows: false
+    Show Axes: true
+    Show Names: true
+    Update Interval: 0
+    Value: true
+  - Class: rviz_default_plugins/Map
+    Name: Saved map
+    Enabled: true
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /map
+    Alpha: 0.7
+    Color Scheme: map
+    Draw Behind: true
+    Value: true
+  - Class: rviz_default_plugins/Map
+    Name: Global Costmap
+    Enabled: true
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /global_costmap/costmap
+    Alpha: 0.35
+    Color Scheme: costmap
+    Draw Behind: false
+    Value: true
+  - Class: rviz_default_plugins/Map
+    Name: Local Costmap
+    Enabled: true
+    Topic:
+      Depth: 1
+      Durability Policy: Transient Local
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /local_costmap/costmap
+    Alpha: 0.5
+    Color Scheme: costmap
+    Draw Behind: false
+    Value: true
+  - Class: rviz_default_plugins/Path
+    Name: Global plan
+    Enabled: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /plan
+    Alpha: 1
+    Buffer Length: 1
+    Color: 25; 255; 100
+    Head Diameter: 0
+    Line Style: Lines
+    Line Width: 0.05
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Pose Style: None
+    Radius: 0.03
+    Shaft Diameter: 0.02
+    Value: true
+  - Class: rviz_default_plugins/Path
+    Name: Local plan
+    Enabled: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /local_plan
+    Alpha: 1
+    Buffer Length: 1
+    Color: 80; 160; 255
+    Head Diameter: 0
+    Line Style: Lines
+    Line Width: 0.06
+    Offset:
+      X: 0
+      Y: 0
+      Z: 0
+    Pose Style: None
+    Radius: 0.03
+    Shaft Diameter: 0.02
+    Value: true
+  - Class: rviz_default_plugins/Polygon
+    Name: Footprint
+    Enabled: true
+    Alpha: 1.0
+    Color:
+    - 255
+    - 200
+    - 60
+    Topic:
+      Depth: 10
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter size: 10
+      Value: /local_costmap/published_footprint
+    Value: true
+  - Class: rviz_default_plugins/PointCloud2
+    Name: Obstacles (segmented)
+    Enabled: true
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /obstacles
+    Alpha: 1
+    Autocompute Intensity Bounds: true
+    Axis: Z
+    Color: 255; 60; 60
+    Color Transformer: FlatColor
+    Decay Time: 0
+    Position Transformer: XYZ
+    Size (Pixels): 3
+    Size (m): 0.04
+    Style: Points
+    Use rainbow: false
+    Value: true
+  - Class: rviz_default_plugins/PointCloud2
+    Name: Map cloud (3D)
+    Enabled: false
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /cloud_map
+    Alpha: 1
+    Autocompute Intensity Bounds: true
+    Axis: Z
+    Color: 255; 255; 255
+    Color Transformer: AxisColor
+    Decay Time: 0
+    Position Transformer: XYZ
+    Size (Pixels): 2
+    Size (m): 0.03
+    Style: Points
+    Use rainbow: true
+    Value: true
+  - Class: rviz_default_plugins/Polygon
+    Name: Support polygon
+    Enabled: true
+    Alpha: 1.0
+    Color:
+    - 25
+    - 255
+    - 120
+    Topic:
+      Depth: 10
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter size: 10
+      Value: /magi/support_polygon
+    Value: true
+  - Class: rviz_default_plugins/PointStamped
+    Name: CoP (tipping point)
+    Enabled: true
+    Alpha: 1.0
+    Color:
+    - 255
+    - 60
+    - 60
+    Radius: 0.035
+    History Length: 1
+    Topic:
+      Depth: 10
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Filter size: 10
+      Value: /magi/cop
+    Value: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Tools:
+  - Class: rviz_default_plugins/Interact
+    Hide Inactive Objects: true
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/FocusCamera
+  - Class: rviz_default_plugins/Measure
+    Line color: 128; 128; 0
+  # "2D Goal Pose" in the toolbar. It publishes a PoseStamped on /goal_pose,
+  # which bt_navigator subscribes to and turns into a NavigateToPose goal --
+  # so this plain RViz tool is all that is needed to send the robot somewhere.
+  - Class: rviz_default_plugins/SetGoal
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /goal_pose
+  # "2D Pose Estimate". RTAB-Map subscribes to /initialpose and relocalises
+  # from it, which is the way back if localisation is ever lost.
+  - Class: rviz_default_plugins/SetInitialPose
+    Covariance x: 0.25
+    Covariance y: 0.25
+    Covariance yaw: 0.06853891909122467
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+      Value: /initialpose
+  Transformation:
+    Current:
+      Class: rviz_default_plugins/TF
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 22
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Focal Shape Fixed Size: true
+      Focal Shape Size: 0.05
+      Invert Z Axis: false
+      Near Clip Distance: 0.01
+      Pitch: 0.9
+      Yaw: 2.4
+      # Follows the robot. The odometry layout deliberately does not, because
+      # a fixed camera is what makes drift visible; here the question is where
+      # the robot is going, and a view that falls behind stops answering it.
+      Target Frame: base_footprint
+      Value: Orbit (rviz_default_plugins)
+    Saved: null
+Window Geometry:
+  Height: 900
+  Width: 1500
+  QMainWindow State: ''
+  Displays:
+    collapsed: false
+  Views:
+    collapsed: false

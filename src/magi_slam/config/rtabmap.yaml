@@ -116,9 +116,45 @@ rtabmap:
     # that size was the frame offset being taken out, not loop closure.
     Grid/3D: "true"
     Grid/Sensor: "0"                   # build the grid from the lidar cloud
+
+    # RAY TRACING. Not optional here, and the single most important line in
+    # this file for anything that plans on the 2D grid.
+    #
+    # With it off (the default), a cell becomes free only if a GROUND point
+    # lands in it. On rocky terrain most beams land on rock, so most cells
+    # never get a ground point and stay occupied or unknown -- including the
+    # ground the robot is standing on. Measured on a 28 m mapping run over
+    # Rubicon, comparing the grid against the 88 poses the robot physically
+    # occupied:
+    #
+    #                                    ray tracing off     on
+    #   driven cells marked free                 51%       100%
+    #   driven cells marked OCCUPIED             34%         0%
+    #   free-space clearance at those cells    0.10 m      2.86 m
+    #   largest drivable region (0.38 m robot)  1.4 m2   364 m2
+    #
+    # The robot's own start cell was blocked in its own map. Nav2 could not
+    # have planned a single metre of that map, and no amount of costmap tuning
+    # would have fixed it, because the fault was upstream of the costmap.
+    #
+    # Checked against the simulator's terrain rather than against itself: with
+    # ray tracing off, cells the map called free and cells it called occupied
+    # were statistically the same terrain -- 72.8% vs 70.9% genuinely drivable,
+    # median true slope 11.0 vs 10.9 deg. The obstacle layer carried no
+    # information. With it on, occupied cells are real: 90th-percentile true
+    # slope 51 deg against 33 deg for free ones.
+    Grid/RayTracing: "true"
+
     Grid/CellSize: "0.1"
     Grid/RangeMin: "0.6"
-    Grid/RangeMax: "20.0"
+    # 10 m, halved from 20. Ray tracing believes a beam that skims a rise and
+    # lands beyond it, and the further the beam travels the more terrain it can
+    # skim. Trimming the range keeps the free space to where the geometry was
+    # actually resolved; on the same run it cost 25% of the mapped area and
+    # bought a visibly better map -- occupied cells went from 72.8% to 66.6%
+    # genuinely drivable, i.e. fewer of them were drivable ground wrongly
+    # called an obstacle.
+    Grid/RangeMax: "10.0"
     Grid/ClusterRadius: "0.5"
     Grid/GroundIsObstacle: "false"
     # Rubicon is rocky and genuinely steep; a stricter angle would paint most
