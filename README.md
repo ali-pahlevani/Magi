@@ -284,6 +284,49 @@ because the correction has to be full 6-DoF: EKF yaw is gyro-integrated and
 drifts, and odom z is terrain-relative and does not track the terrain's 5 m of
 relief. Both are exactly what loop closure exists to absorb.
 
+### Where z = 0 is, and why the map used to float
+
+RTAB-Map anchors its `map` frame on the pose of whatever `frame_id` names, at
+the first keyframe. Point it at `base` and z = 0 of the map lands wherever the
+body happened to be — which on this robot is a whole ride height off the floor.
+
+That is invisible in the 3D cloud and glaring in the 2D one. A
+`nav_msgs/OccupancyGrid` always carries `origin.position.z = 0`, so RViz drew
+`/map` as a flat plane 0.35 m in the air, cutting through the robot with its
+wheels hanging underneath it. The cloud was never wrong: measured against the
+simulator's own heightmap, its ground returns land within **0.03 m** of the
+true surface. Neither was the robot. Only the datum was.
+
+Two changes fix it, and they are independent:
+
+* **`magi_leg_odometry` sets the odom datum once**, at startup, when the robot
+  is standing with a settled height. It already measures body height above the
+  contact plane to ~9 mm, so it calls the EKF's `/set_pose` and moves z = 0
+  down by exactly that. `/odometry/filtered` now reports the robot's real ride
+  height instead of ~0. (`set_ground_datum:=false` restores the old behaviour.)
+* **`rtabmap` anchors on `base_footprint`**, a rigid link 0.36 m below `base`
+  added in `magi_go2w.urdf.xacro`. Rigid, not a tracked projection: SLAM wants
+  a frame bolted to the robot, and a footprint that bobbed with the ride height
+  would push that bobbing into scan registration.
+
+Measured afterwards, standing:
+
+| | |
+|---|---|
+| map z = 0 against the true ground | **2 mm** |
+| 2D grid plane against the wheel contacts | **1 mm** |
+| `map -> odom` z | 0.000, sd 0.000 |
+
+and after nine metres of driving over the terrain, the grid is **38 mm** off
+the wheels. The residue is the known one: odom z is terrain-relative and does
+not track absolute elevation, so the cloud's ground drifts to about 0.13 m
+below truth over that distance. That is what loop closure exists to absorb, and
+it is drift rather than the fixed 0.35 m offset it replaced.
+
+**Run one `rtabmap` at a time.** Two of them both publish `map -> odom`, and
+the symptom is not an error but a z that flickers between two values — it cost
+a wrong diagnosis here before the second instance turned up.
+
 ### Measured
 
 A 6 s segment at 0.35 m/s across the basin, against Gazebo ground truth:

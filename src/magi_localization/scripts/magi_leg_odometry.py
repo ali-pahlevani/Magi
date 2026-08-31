@@ -35,14 +35,42 @@ reads zero while the robot genuinely climbs, so it does not let odom track
 absolute elevation -- that still needs SLAM. What it does do is pin the
 vertical channel to a measured quantity, so z error becomes a slow random walk
 instead of an unbounded quadratic divergence.
+
+WHERE Z = 0 IS, AND WHY THIS NODE DECIDES IT
+
+REP-105 leaves the odom origin arbitrary, and robot_localization's default is
+the base frame's pose when the filter starts. On a robot whose base_link sits
+on its axles that is close enough to the ground for nobody to notice. On this
+one `base` rides 0.35 m up, so z = 0 in odom -- and therefore in map -- landed
+at the robot's CHEST, not on the floor.
+
+Everything that is intrinsically two-dimensional then floats there. RTAB-Map's
+/map occupancy grid is a nav_msgs/OccupancyGrid with origin.position.z = 0, so
+RViz drew it as a flat plane 0.35 m above the terrain, cutting through the
+robot: the map looked higher than the robot and the wheels hung below it. The
+3D cloud was never wrong -- measured against the simulator's own heightmap, its
+ground returns sit within 0.03 m of the true surface -- and neither was the
+robot. Only the datum was.
+
+So once the robot is standing still and the height reading has settled, this
+node calls the EKF's /set_pose once and moves the z datum down by exactly the
+height it just measured. After that z = 0 in odom is the ground plane under the
+start point, /odometry/filtered reports the robot's real ride height instead of
+~0, and the occupancy grid lands on the wheels. x, y and orientation are taken
+from the filter's own current estimate, so this is a pure vertical shift and
+nothing else about the pose is disturbed.
+
+Set set_ground_datum:=false to keep the old base-height datum.
 """
 
 import math
 
 import rclpy
 from geometry_msgs.msg import TwistWithCovarianceStamped, Wrench
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+from robot_localization.srv import SetPose
 from sensor_msgs.msg import Imu
 from std_msgs.msg import Float64, String
 from tf2_ros import Buffer, TransformListener
@@ -79,6 +107,16 @@ class LegOdometry(Node):
         # the low-pass on vz, in seconds.
         self.declare_parameter("velocity_filter_tau", 0.08)
         self.declare_parameter("vz_stddev", 0.05)
+        # ---- ground datum (see the module docstring) ------------------------
+        self.declare_parameter("set_ground_datum", True)
+        self.declare_parameter("datum_service", "/set_pose")
+        # How long the height has to sit still, and how still, before the
+        # reading is taken as the ride height rather than part of the stand-up.
+        self.declare_parameter("datum_settle", 1.0)
+        self.declare_parameter("datum_tolerance", 0.005)
+        # Give up rather than shift the datum under a filter that has already
+        # been running and moving; a late jump would drag the map with it.
+        self.declare_parameter("datum_deadline", 60.0)
 
         self.radius = self.get_parameter("wheel_radius").value
         self.base = self.get_parameter("base_frame").value
@@ -113,6 +151,20 @@ class LegOdometry(Node):
         self.h = None
         self.vz = 0.0
         self.last_stamp = None
+
+        self.datum_done = not bool(self.get_parameter("set_ground_datum").value)
+        self.datum_since = None       # when the height last started sitting still
+        self.datum_ref = None         # the height it has been sitting at
+        self.datum_future = None
+        self.odom = None
+        self.started = self.get_clock().now()
+        if not self.datum_done:
+            self.create_subscription(
+                Odometry, "/odometry/filtered",
+                lambda m: setattr(self, "odom", m), 10)
+            self.datum_client = self.create_client(
+                SetPose, self.get_parameter("datum_service").value)
+
         period = 1.0 / self.get_parameter("rate").value
         self.create_timer(period, self._update)
 
@@ -174,6 +226,59 @@ class LegOdometry(Node):
         msg.twist.twist.linear.z = self.vz
         msg.twist.covariance = self._cov
         self.pub_t.publish(msg)
+
+        if not self.datum_done:
+            self._ground_datum(h, len(stance), now)
+
+    def _ground_datum(self, h, contacts, now):
+        """Move the odom z datum from the body down to the ground, once.
+
+        Waits for the robot to be standing on at least three feet with the
+        measured height steady, so the value taken is the settled ride height
+        and not a moment during the stand-up.
+        """
+        age = (now - self.started).nanoseconds * 1e-9
+        if age > float(self.get_parameter("datum_deadline").value):
+            self.datum_done = True
+            self.get_logger().warn(
+                "ground datum not set within "
+                f"{self.get_parameter('datum_deadline').value:.0f} s; odom z "
+                "stays referenced to the body, so a 2D map will sit one ride "
+                "height above the ground")
+            return
+
+        if self.datum_future is not None:
+            if not self.datum_future.done():
+                return
+            self.datum_done = True
+            self.get_logger().info(
+                f"ground datum set: odom z = 0 is now the ground plane, "
+                f"{self.datum_ref:.3f} m below the body")
+            return
+
+        tol = float(self.get_parameter("datum_tolerance").value)
+        if contacts < 3 or self.datum_ref is None or abs(h - self.datum_ref) > tol:
+            self.datum_ref, self.datum_since = h, now
+            return
+        if (now - self.datum_since).nanoseconds * 1e-9 < float(
+                self.get_parameter("datum_settle").value):
+            return
+        if self.odom is None or not self.datum_client.service_is_ready():
+            return
+
+        # x, y and orientation come from the filter's own estimate, so this
+        # only ever moves z. The covariance is the filter's too, with the z
+        # term tightened to the accuracy of the leg-kinematics height.
+        request = SetPose.Request()
+        request.pose.header.stamp = now.to_msg()
+        request.pose.header.frame_id = self.odom.header.frame_id or "odom"
+        request.pose.pose = self.odom.pose
+        request.pose.pose.pose.position.z = float(h)
+        cov = list(self.odom.pose.covariance)
+        cov[14] = 1.0e-4                      # (1 cm)^2 on z
+        request.pose.pose.covariance = cov
+        self.datum_ref = h
+        self.datum_future = self.datum_client.call_async(request)
 
 
 def main():

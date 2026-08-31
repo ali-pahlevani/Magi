@@ -22,7 +22,20 @@ rtabmap:
   ros__parameters:
     use_sim_time: true
 
-    frame_id: base
+    # base_footprint, NOT base. RTAB-Map anchors the map frame on the pose of
+    # this frame at the first keyframe, so whatever it names becomes z = 0 of
+    # the map. `base` sits a whole ride height off the floor, which put the
+    # datum at chest height: the /map occupancy grid (a nav_msgs/OccupancyGrid,
+    # whose origin.position.z is always 0) was drawn by RViz as a flat plane
+    # 0.35 m in the air, cutting through the robot with its wheels hanging
+    # below it. The 3D cloud was never wrong -- checked against the simulator's
+    # own heightmap, its ground returns land within 0.03 m of the true surface
+    # -- and neither was the robot. Only the datum was.
+    #
+    # base_footprint is a rigid link 0.36 m below base, defined in
+    # magi_go2w.urdf.xacro; see the note there for why it is rigid rather than
+    # a tracked projection.
+    frame_id: base_footprint
     map_frame_id: map
     # Empty => take odometry from the /odom TOPIC (remapped to
     # /odometry/filtered in the launch file) rather than from TF, so rtabmap
@@ -94,8 +107,13 @@ rtabmap:
     # Setting this false would flatten the map at the source, and there would
     # be no 3D structure left to project from or to display.
     # Verified on Rubicon: 20,359 points spanning z -0.52..+1.70 m (2.22 m
-    # spread, sd 0.58), with map->odom correcting z by -0.204 m and roll/pitch
-    # by 0.74/0.68 deg -- i.e. a genuinely 6-DoF correction, not a planar one.
+    # spread, sd 0.58).
+    #
+    # An earlier note here read a -0.204 m z term in map->odom as evidence of a
+    # genuinely 6-DoF correction. Treat that with suspicion: with the datum
+    # fixed and one rtabmap running, map->odom z sits at 0.000 (sd 0.000)
+    # standing still and +0.011 after nine metres of driving. A correction of
+    # that size was the frame offset being taken out, not loop closure.
     Grid/3D: "true"
     Grid/Sensor: "0"                   # build the grid from the lidar cloud
     Grid/CellSize: "0.1"

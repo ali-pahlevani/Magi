@@ -20,6 +20,37 @@
 
   <xacro:include filename="$(find magi_description)/urdf/go2w_body.xacro"/>
 
+  <!-- Ground-level reference frame, REP-120's base_footprint.
+
+       `base` sits at the body, which on this robot is a whole ride height off
+       the floor, and that is not a good origin for anything two-dimensional.
+       RTAB-Map anchors its `map` frame on the pose of whatever frame it is
+       given, at the first keyframe. With `base` that put z = 0 of the map at
+       chest height, and since a nav_msgs/OccupancyGrid always carries
+       origin.position.z = 0, the 2D map came out as a flat plane cutting
+       through the robot with the wheels hanging below it. Anchoring on this
+       frame instead puts z = 0 on the ground, where a 2D map belongs and
+       where Nav2's costmaps will want it.
+
+       It is a RIGID offset, not a tracked projection, and that is deliberate.
+       SLAM needs a frame rigidly attached to the robot; a footprint that
+       bobbed with the ride height would push that bobbing straight into scan
+       registration. The offset is the nominal stance height, so the frame is
+       on the ground when the robot stands normally and a centimetre or two
+       off when the stance controller crouches. Both of the things it is used
+       for (placing the map origin once, and drawing 2D products) are
+       insensitive to that.
+
+       Keep stance_height in step with `ride_height` in magi_stabilizer.yaml.
+       The live, exact figure is published on /magi/terrain_height. -->
+  <xacro:property name="stance_height" value="0.36"/>
+  <link name="base_footprint"/>
+  <joint name="base_footprint_joint" type="fixed">
+    <origin xyz="0 0 -${stance_height}" rpy="0 0 0"/>
+    <parent link="base"/>
+    <child link="base_footprint"/>
+  </joint>
+
   <xacro:include filename="$(find magi_description)/urdf/livox_mid360.xacro"/>
   <xacro:livox_mid360 parent="imu" name="livox_mid360"/>
 
