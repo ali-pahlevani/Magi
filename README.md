@@ -60,7 +60,7 @@ rather than after a spell of TF errors. Turn either window off with
 | Package | Contents |
 |---|---|
 | `magi_description` | URDF/xacro, meshes, `ros2_control` interfaces, Gazebo tags, RViz config |
-| `magi_gazebo` | Offline Rubicon world + vendored model, flat test world, simulator launch |
+| `magi_gazebo` | Offline Rubicon world + vendored model, heightmap rebuild, flat test world, simulator launch |
 | `magi_control` | Controller YAML, spawners, stance/balance/posture nodes, keyboard teleop |
 | `magi_localization` | EKF + leg odometry + IMU conditioner; owns `odom -> base` |
 | `magi_bringup` | Simulation stack: world, robot, controllers, estimation |
@@ -91,10 +91,11 @@ src/magi_gazebo/scripts/fetch_rubicon.sh   # ~187 MB download, once
 colcon build --symlink-install
 ```
 
-The script downloads, verifies the archive and re-applies the terrain friction
-patch, so the result is byte-identical to what the measurements below were
-taken against. Everything else — the robot description, meshes, controllers and
-launch files — is tracked normally.
+The script downloads, verifies the archive, re-applies the terrain friction
+patch and **rebuilds the heightmap** (see
+[the offline world](#the-offline-world)), so the result matches what the
+measurements below were taken against. Everything else — the robot description,
+meshes, controllers and launch files — is tracked normally.
 
 ### Why gz_ros2_control is built from source
 
@@ -363,16 +364,71 @@ Measured on Rubicon, spawned and reset to (4.0, -0.5, 1.80), 8 s per run:
 | v 1.5, w 1.2 | 1/3 upright, roll 85° | **7/8**, roll 12° |
 | **total** | **4/12** | **21/22** |
 
-Standing still it is also quieter — body rate 0.005 rad/s rms against 0.017,
-with all four wheels loaded against 3.3. The governing costs 15–25% of the
-ground covered, which is what the runs finishing upright are worth.
-
 It is *not* a guarantee. There is no stepping, so a big enough terrain event
-still wins; 21/22 is not 22/22. See the module docstring in
+still wins. See the module docstring in
 `magi_control/scripts/magi_stabilizer.py`, which also records the three
 measurements that shaped the design — why the accelerometer cannot be used raw
 as an attitude reference, why contacts have to be held briefly after they go
 light, and why splaying the stance helps even though it cambers the wheels.
+
+#### Five faults that made it crawl, and how each was found
+
+Everything above was true of the design and false of the implementation. The
+robot as shipped crossed the terrain at 1.07 m per 8 s run, splayed to its
+stance limit and stuck there, refusing every command above its roughness crawl.
+Each fault is documented at its site in `magi_stabilizer.py` and
+`magi_stabilizer.yaml`; in the order they had to be peeled apart:
+
+**1. The attitude loop was shaking the robot blind.** The rate term was fed to
+the legs unfiltered, on the reasoning that damping delayed is damping wasted.
+But the path from "command a body attitude" to "the body rolls" runs through
+the command horizon, the trajectory controller and the ~20 Hz mode of the body
+on the hip PD — 180° of phase well before 20 Hz — so undelayed rate feedback
+there is gain, not damping. Standing still on level ground it sustained a
+**19.5 Hz limit cycle at 3.9 rad/s rms**, and the accelerometer read **±200
+m/s²**: 20 g on a stationary robot. Every consumer downstream reads that
+accelerometer, so the effective-gravity reference became garbage (a_y 130
+against a_z 14), the stability margin reported **−32° on an upright robot**, and
+everything below followed. With the filter back on the whole command and `kd`
+at 0.05: **0.007 rad/s rms**.
+
+**2. The acceleration envelope was never actually computed.** `_accel_envelope`
+built effective gravity as `-down*G`, which points *up*. Every bisection probe
+failed the "support pattern must be below the CoM" test, both searches returned
+`a_lat_floor`, and the governor had been running on a hard-coded **0.8 m/s² of
+lateral authority** — against the 10.0 m/s² a splayed stance is actually good
+for — since the envelope was written. One sign.
+
+**3. The terrain preview scored hills as roughness.** It fit a *plane* to lidar
+returns 2.6–5.4 m ahead and called the residual roughness. Over a 2.8 m window a
+hill is not a plane: measured over 600 random placements on Rubicon, the plane
+residual is p50 5.3 cm and p90 16.5 cm on ground that is merely *sloped*, against
+a 4.5 cm "fully rough" reference. The preview therefore read **fully rough over
+57% of the map**, permanently. It fits a quadratic now — p50 3.4 cm, curvature in
+the model where it belongs — and both the roughness and slope terms are gated by
+time-to-arrival, because the MID-360 cannot see the ground closer than 2.69 m and
+at a walking pace that window is eight seconds away.
+
+**4. Urgency was pinned at 1.00, so the stance never came back in.** With (1) and
+(3) feeding it and a slope reference hard-coded at 0.35 rad — below this
+terrain's 75th-percentile slope — the robot sat permanently splayed to its
+0.600 m limit and permanently throttled to `v_rough_min`, which was 0.35 m/s.
+That single number was the robot's top speed everywhere on Rubicon.
+
+**5. The stance was friction-locked, and nobody had checked.** Dragging four
+loaded wheels sideways costs 17.3 N·m at the hip against a 23.7 N·m limit, so at
+rest the width lever does not exist. Measured at 0.413 rad of splay with the
+target set back to nominal: both front hips **pinned at exactly −23.700 N·m**,
+and the splay did not move for as long as the robot stood there — through a
+sweep of `widen_max` from 0.110 to 0. Six seconds of rolling brought the same
+joint back to 0.038 rad. Reshaping is gated on rolling now.
+
+And one thing that was simply missing: **nothing guarded the pitch axis.** The
+whole node is built around the 31.4° roll tipping angle because the stance can
+be widened to answer it. Its pitch twin, `atan(0.1934/0.311)` = **31.9°** of
+nose-up, has no lever at all — and the robot drove onto faces steeper than that
+and went over backwards. There is a guard for it now; see
+[Known limitations](#known-limitations) for what it can and cannot do.
 
 ### The legs are torque-controlled
 
@@ -428,27 +484,52 @@ generous `--switch-timeout`.
 Ground truth read from the Gazebo server, yaw accumulated unwrapped.
 
 **Always use `--reps` on terrain.** A single run on `rubicon.sdf` is close to
-worthless: the robot veers onto different ground each time, and single runs in
-this project produced anything from 15% to 79% for *identical* configurations.
-Flat ground repeats to sd 0.2, so the variance is terrain, not the harness.
+worthless: the robot veers onto different ground each time, and the *same* start
+pose under an *identical* configuration has produced 2.7 m and 5.4 m. Flat
+ground repeats to sd 0.2, so the variance is terrain, not the harness.
 
-8 reps × 3.5 s at 1.0 m/s from a fixed reset pose:
+### Can it get around the world?
 
-| World | Mean linear efficiency | sd |
-|---|---|---|
-| `flat.sdf` | **88.8%** | 0.2 |
-| `rubicon.sdf`, basin | **47.4%** | 2.3 |
+The drive benchmark answers "what fraction of the commanded speed does it make,
+here". The question that actually matters is whether the robot can cross the
+map, and that needs several places on it. `magi_terrain_trial.py` drives a
+twelve-leg course — nine start poses spread over Rubicon with footprint-scale
+slopes from 3° to 23°, plus two arcs and a spin — and reports **net
+displacement**, not path length, because a robot shaking itself sideways racks
+up path without going anywhere.
 
-Spin and arc figures (single runs on `flat.sdf`, where repeatability is high):
-0.5 rad/s → 78%, 1.0 rad/s → 78%, 1.5 rad/s → 81%, all with zero stance drop.
+Three passes of the course each, 8 s per leg, 36 legs per configuration:
 
-After all of the above the robot returns to stance with every leg joint within
-0.013 rad of target, and the base at 0.412 m over local terrain against a 0.408 m
-design stance.
+| | stood up | **net displacement** | path | upright at end |
+|---|---|---|---|---|
+| before the fixes below | 31/36 | **1.07 m** | 1.54 m | 28/31 |
+| control fixes, 8-bit terrain | — | **1.52 m** | 1.81 m | 19/21 |
+| control fixes + rebuilt terrain | 29/36 | **3.23 m** | 3.68 m | 18/29 |
+| …at `ride_height` 0.36 (default) | 11/12 | **2.57 m** | 3.08 m | **9/11** |
 
-Reproduce with the benchmark, which reads Gazebo ground truth rather than
-odometry (wheel odometry over-reads yaw badly on a skid-steer) and resets the
-robot between reps so every sample starts from the same ground:
+Three times the ground covered. The last row is one pass rather than three, and
+is the shipped default: see the `ride_height` note in `magi_stabilizer.yaml` for
+why twenty points of upright rate is worth twenty percent of the distance here.
+
+The honest reading of the upright column: the fixed robot rolls over **more per
+run** than the stock one did, and that is because it now reaches things. Eight
+of the twelve rollovers in the 0.40 row were at the two start poses that have a
+boulder within a metre — ground the stock configuration was simply too slow to
+arrive at. Nothing in this stack does obstacle avoidance yet; the course drives
+blind into a boulder field for eight seconds at a time.
+
+On flat ground, where there is nothing to hit, the same configuration makes
+**0.98 m/s of a commanded 1.00** with body rates of 0.007 rad/s rms.
+
+```bash
+ros2 run magi_control magi_terrain_trial.py --duration 8 --reps 3
+ros2 run magi_control magi_terrain_trial.py --duration 8 \
+    --course '[[0,0,0.5,0,1.0,0.0]]' --world flat      # single leg, flat
+```
+
+For per-spot efficiency the older benchmark is still the right tool. It reads
+Gazebo ground truth rather than odometry (wheel odometry over-reads yaw badly on
+a skid-steer) and resets the robot between reps:
 
 ```bash
 ros2 run magi_control magi_drive_benchmark.py 1.0 0.0 3.5 --reps 8 \
@@ -456,6 +537,13 @@ ros2 run magi_control magi_drive_benchmark.py 1.0 0.0 3.5 --reps 8 \
 ros2 run magi_control magi_drive_benchmark.py 0.6 0.4 3.5 --reps 8 \
     --reset-world rubicon --reset-pose 3.0,-0.5,1.85     # arcing turn
 ```
+
+**Run one stance controller at a time.** Both tools drive the robot from a
+separate process, and a stray `magi_posture` left running alongside
+`magi_stabilizer` produces measurements that look like physics and are not —
+it cost a long detour here, with the robot apparently unable to move on flat
+ground at 3.5% of commanded speed, legs limp at exactly 0.00 N·m, until the
+second publisher on `/leg_controller/joint_trajectory` turned up.
 
 ### What torque control changed
 
@@ -502,19 +590,21 @@ differential and cannot see the scrub. Fuse `/imu_sensor_broadcaster/imu` before
 trusting heading. For snappier turning at the cost of odometry fidelity, raise
 `wheel_separation_multiplier` in `magi_controllers.yaml`.
 
-**Terrain roughly halves speed (88.8% → 47.4%) and the robot veers.** This is a
-property of the asset, not a tuning problem.
+**Terrain costs about a third of the speed, and the robot still veers.** On
+flat ground the robot makes 0.98 m/s of a commanded 1.00; over Rubicon the
+governor's own roughness ceiling and ~24% of wheel slip bring that to
+0.6–0.8 m/s. That is a fair price for the ground, not a fault.
 
-The Rubicon heightmap is an **8-bit** PNG spanning 5 m of relief, so one grey
-level is 5.0/255 = **19.6 mm**. The terrain is therefore a staircase with ~2 cm
-risers every 7.3 cm cell, against an 8.6 cm wheel radius. Step-climbing
-resistance goes as `sqrt(2h/r)`, which at h = 19.6 mm is ~0.67 of the wheel
-load — enough to explain the whole gap. The measured mean step across the map,
-18.0 mm, is almost exactly one quantisation level.
-
-Isolating it: a flat platform placed *inside* the Rubicon world — same lighting,
-models, friction and robot, 2 m from the terrain — gives 83.6%. The contact
-surface is the only variable.
+The 8-bit heightmap staircase that used to dominate this section is **fixed** —
+see [the offline world](#the-offline-world). It is worth restating why the
+earlier attempt at the same fix was dismissed: measured with the old
+controller, the 16-bit rebuild gave 72.8% against 68.6% and could not be
+separated from noise at n=8. That reading was correct and the conclusion drawn
+from it was wrong. The terrain was never the binding constraint at the time —
+the stance controller was — and a fix to the second-largest problem does not
+show up while the largest one is still there. With the control faults below
+repaired, the same terrain rebuild is worth **1.52 m → 3.23 m** of ground per
+8 s run.
 
 Things that were tried and did **not** help (each re-measured with reps where
 the first single-run result looked promising):
@@ -523,16 +613,13 @@ the first single-run result looked promising):
 |---|---|
 | wheel friction 1.0 vs 1.4 | no change |
 | wheel collision mesh vs cylinder | no change |
+| wheel collision **sphere** vs cylinder | 20% vs 24% slip — within noise, and a sphere of the wheel radius is 6 cm wider than the wheel |
 | leg compliance (position vs effort) | no change |
 | command speed 0.2 / 0.4 / 1.0 m/s | no change |
 | dartsim collision detector `bullet` | worse |
-| dartsim collision detector `ode` | worse |
-| heightmap `<sampling>` 1 / 2 / 4 | 38.9% vs 40.6% vs — , within noise |
-| 16-bit de-quantised heightmap | 72.8% vs 68.6%, within noise (n=8, sd ~12) |
+| `open_loop_control` on `leg_controller` | clean on flat, a 50 Hz roll oscillation on terrain — see the note in `magi_controllers.yaml` |
 
-The 16-bit rebuild is the physically-correct fix for the quantisation and had
-the better mean, but 8 reps could not separate it from noise, so it is not
-applied. Use `world:=flat.sdf` when tuning controllers, then confirm on terrain.
+Use `world:=flat.sdf` when tuning controllers, then confirm on terrain.
 
 **Rollover: largely addressed by `magi_balance`, not eliminated.** The robot
 used to flip under genuinely gentle commands — 0.35 m/s with 0.15 rad/s put it
@@ -559,7 +646,17 @@ scrubs harder in a skid-steer turn. If a run needs distance more than
 stability, `balance:=false` restores the old fixed stance.
 
 There is still no self-righting behaviour, so a large enough disturbance leaves
-the robot down until the pose is reset.
+the robot down until the pose is reset. On a teleoperated run that is the
+failure that costs most, and it is the obvious next thing to build.
+
+**Nothing avoids obstacles.** The world carries ~200 rock, stump and rockpile
+colliders plus 34 tree trunks, and most protrude well above the 8.6 cm wheel
+radius. The robot cannot see them: the MID-360 looks only 7° below its own
+horizon, so from 0.50 m up its lowest ray does not reach the ground until
+2.69 m out and anything shorter than about 0.4 m inside that radius is
+invisible. Driven blind, the robot hits them — which is most of what the
+rollover column in [Measured behaviour](#measured-behaviour) is counting. A
+human driver steers around them; Nav2 in Phase 5 is what closes this properly.
 
 *Why the turn was never the problem.* At 0.35 m/s and 0.15 rad/s the lateral
 acceleration is 0.0525 m/s², which moves the centre of pressure by **1.7 mm of
@@ -568,18 +665,34 @@ lean feed-forward is therefore almost irrelevant at these speeds; what does the
 work is the attitude feedback rejecting terrain impulses, and the anticipatory
 widening that raises the tipping angle to 39.9°.
 
-**Hips saturate on terrain.** Driving across Rubicon at 1 m/s pins FL and FR
-hip at their 23.7 N·m URDF limit (RL 71%, RR 81%) as the wheels get shoved
-laterally by facets. That is the real robot's actuator spec, so it is arguably
-correct fidelity rather than a bug — but it caps how hard the platform can be
-pushed over rough ground.
+**The stance width lever only exists while the wheels are turning.** Reshaping
+the stance means dragging four loaded wheels sideways, and that costs `mu*N`
+through the stance height — 1.0 × 48 N × 0.36 m = **17.3 N·m** at the hip — on
+top of the ~12 N·m the splay already holds statically, against a 23.7 N·m hip
+limit.
 
-**Compliance did not fix terrain traction.** Switching the legs from rigid
-position control to compliant torque control left forward efficiency on Rubicon
-unchanged at ~25%. Combined with the earlier eliminations — friction level,
-collision primitive, command speed — the remaining explanation is dartsim's
-wheel-on-heightmap contact behaviour, not the robot model. See the benchmark
-note below.
+Measured standing on Rubicon at 0.413 rad of splay, with the target set back to
+the nominal stance: both front hips sat at exactly **−23.700 N·m**, saturated,
+and the splay did not move by one milliradian for as long as the robot stood
+there — through a sweep of `widen_max` from 0.110 all the way to 0. Six seconds
+of rolling at 0.6 m/s brought the same joint back to 0.038 rad with 10.6 N·m of
+effort.
+
+So the lever is one-way at rest, and asking for it anyway does not widen the
+stance — it just holds both hip motors against their stops, which on the real
+machine is a thermal fault rather than a stance. `reshape_roll_speed` fades the
+rate out below a walking pace and `widen_band` keeps the commanded width within
+reach of the achieved one, so the hip PD never saturates on a difference it
+cannot close.
+
+**Terrain traction was never the binding constraint.** Compliance, friction
+level, collision primitive and command speed were each eliminated in turn, and
+the conclusion drawn at the time was that dartsim's wheel-on-heightmap contact
+was to blame. It is not. Measured directly, wheel surface speed against ground
+speed over Rubicon is **24% slip** — real, but nothing like enough to explain
+driving at a sixth of the command. Ground speed now tracks the *governed*
+command essentially exactly; what had been limiting the robot was the governor,
+for the reasons in the section below.
 
 **`mu2`/`fdir1` do nothing.** `dartsim`, the default physics engine, uses a
 single isotropic friction coefficient per shape. They are set in
@@ -592,6 +705,33 @@ with `flat.sdf`.
 a yaw manoeuvre pushes each wheel sideways with up to `mu*N` (N ~ 48 N per
 wheel) acting a stance height below the hip axis, so the hip sees `mu*48*0.4`
 N·m and must stay under 23.7 N·m, i.e. `mu < 1.23`.
+
+**The pitch axis has a tipping angle too, and it is the tighter one to think
+about.** Everything in `magi_stabilizer` is built around the 31.4° roll figure,
+because the stance can be widened to answer it. The pitch twin
+
+```
+atan(half_wheelbase / h_com) = atan(0.1934 / 0.311) = 31.9°
+```
+
+has **no lever at all**: widening is a roll remedy and the wheelbase is fixed.
+Past 31.9° of nose-up the centre of mass is behind the rear contacts and the
+robot goes over its own tail, and on Rubicon it did exactly that — driving onto
+a face steeper than that, pitching −7° → −16° → −22° → −34° over three quarters
+of a second and landing on its back.
+
+Worth knowing what it is *not*: wheel drive torque stayed at **1.1 N·m of the
+available 23.7** throughout, so the robot was not grinding against anything, it
+was climbing something it should not have climbed. And the foot-force contact
+test still reported all four wheels loaded at 73° of pitch, which is why the
+guard in `_govern` keys off pitch and pitch rate instead.
+
+The same geometry says the machine is inherently wheelie-prone under full
+tractive effort — the no-wheelie condition is `mu < half_wheelbase / h_com` =
+**0.62**, and `mu` is 1.0 because hill climbing needs it. Ordinary driving never
+goes near it (accelerating at the governed 1.5 m/s² needs 29 N of the 191 N the
+ground could deliver), but it is the reason the rear-up guard exists rather than
+a speed limit.
 
 ---
 
@@ -608,7 +748,7 @@ To re-create or update that copy:
 src/magi_gazebo/scripts/fetch_rubicon.sh
 ```
 
-Two things that script handles and a plain download does not:
+Three things that script handles and a plain download does not:
 
 * The Fuel URL **truncates** — a straight `curl` stopped at 128 MB of the real
   187,430,027 bytes and produced a corrupt zip. It uses `--retry`/`-C -` and
@@ -616,6 +756,50 @@ Two things that script handles and a plain download does not:
 * The upstream heightmap collision declares **no friction surface at all**, so
   it falls back to Gazebo's default. Adding an explicit `mu` of 1.5 took driving
   from 16% to 28% of commanded speed. The script re-applies that patch.
+* The heightmap itself is rebuilt — see below.
+
+### The heightmap is a staircase, and it is rebuilt
+
+`Heightmap.png` ships as an **8-bit** greyscale image stretched over 5 m of
+relief. One grey level is therefore
+
+```
+5.0 / 255 = 19.6 mm
+```
+
+and the terrain is not a surface but a flight of stairs: flat plateaus with
+~2 cm risers, one every 7.3 cm cell. Measured on the shipped asset, the mean
+cell-to-cell step is **15.6 mm** — essentially one quantisation level
+everywhere, i.e. over most of the map the relief the author drew is smaller
+than the format can represent.
+
+For an 86 mm wheel that is not cosmetic. Mounting a step of height `h` with a
+wheel of radius `r` needs a tractive force of `sqrt(2rh - h²)/(r - h)`, which
+at `h` = 19.6 mm is **0.82** against a friction coefficient of 1.0. Every cell
+boundary is a near-stall obstacle, and every one that is cleared delivers an
+impulse into the body — the bogging down and the rolling over, from one cause.
+
+[`rebuild_heightmap.py`](src/magi_gazebo/scripts/rebuild_heightmap.py) fixes it
+without changing the terrain the author drew. The true surface is known to lie
+within half a grey level of each sample, so the staircase comes out by smoothing
+under exactly that constraint — Laplacian relaxation, clamped back into
+`[h ± ½ level]` every pass — and the result is then resampled to 1025×1025 and
+written as **16 bit**, where one level is 0.076 mm instead of 19.6.
+
+| | resolution | mean step | slope p50 |
+|---|---|---|---|
+| shipped, 8-bit | 513² (7.3 cm cells) | 15.6 mm | 15.0° |
+| rebuilt, 16-bit | 1025² (3.7 cm cells) | **6.7 mm** | **11.6°** |
+
+No sample moves more than **9.8 mm**, so every rock, tree and structure placed
+against the original terrain stays where it was put. The slope figure falls
+without the terrain changing shape, because most of that 15° was the staircase
+rather than the hill.
+
+Worth **1.52 m → 2.18 m** of ground covered per 8 s run over the standard
+course (see [Measured behaviour](#measured-behaviour)). The original
+`Heightmap.png` is left in place; only `model.sdf` is repointed, so reverting is
+a one-line change.
 
 ## Description notes
 

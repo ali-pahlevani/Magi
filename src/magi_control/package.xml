@@ -21,6 +21,13 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>trajectory_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <!-- scripts/magi_terrain_trial.py reads simulator ground truth through a
+       bridge it starts itself -->
+  <exec_depend>tf2_msgs</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 

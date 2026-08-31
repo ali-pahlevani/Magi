@@ -14,11 +14,21 @@
 # directory puts log/latest -> latest_build in the glob's path and every
 # --symlink-install build then prints a CMP0009 warning.
 #
-# Why the patch: the upstream model declares the terrain heightmap collision
-# with no <surface> block at all, so it falls back to Gazebo's default contact
-# friction. Measured in this workspace, driving the Go2W across the terrain went
-# from 16% to 28% of the commanded speed once an explicit friction surface was
-# added. 1.5 is a reasonable coefficient for rubber on rock.
+# Two patches are applied on top of the Fuel archive, and both are load-bearing:
+#
+#   friction   The upstream model declares the terrain heightmap collision with
+#              no <surface> block at all, so it falls back to Gazebo's default
+#              contact friction. Measured in this workspace, driving the Go2W
+#              across the terrain went from 16% to 28% of the commanded speed
+#              once an explicit friction surface was added. 1.5 is a reasonable
+#              coefficient for rubber on rock.
+#
+#   heightmap  The shipped Heightmap.png is 8-bit over 5 m of relief, so one
+#              grey level is 19.6 mm and the terrain is a staircase rather than
+#              a surface -- see rebuild_heightmap.py, which regenerates it as a
+#              de-quantised 16-bit 1025x1025 map and repoints model.sdf at it.
+#              Worth 1.52 -> 2.18 m of ground covered per 8 s run over the
+#              standard course.
 
 set -euo pipefail
 
@@ -69,5 +79,8 @@ elif text.count(anchor) == 1:
 else:
     sys.exit(f"  unexpected model.sdf layout: found {text.count(anchor)} anchors")
 PY
+
+echo "Rebuilding the heightmap ..."
+python3 "$(dirname "${BASH_SOURCE[0]}")/rebuild_heightmap.py" "$DEST"
 
 echo "Done. Rebuild magi_gazebo to pick the model up."

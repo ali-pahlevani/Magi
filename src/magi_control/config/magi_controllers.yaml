@@ -92,6 +92,35 @@ leg_controller:
     state_publish_rate: 100.0
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
+    # THE STANCE CONTROLLER STREAMS A NEW TRAJECTORY EVERY 10 ms, and by
+    # default JTC re-plans each one from the MEASURED joint state. Under load
+    # the legs sit a few tenths of a degree below target, so every re-plan asks
+    # to close that gap within command_horizon: a phantom velocity of about
+    # 1 rad/s that is never achieved and is re-issued 100 times a second. The
+    # d term turns it into ~10 N.m of ripple straight into a rigid contact.
+    #
+    # Measured on flat ground, robot standing still, from the body IMU:
+    #
+    #   fixed stance (one trajectory, then silence)   a_z 9.641, rms 0.017
+    #   streamed, closed loop                         a_z 9.19,  rms 6.43
+    #                                                 with the peak AT 100 Hz
+    #
+    # a_z reading 9.19 +/- 6.4 instead of 9.82 +/- 0.02 is not a small thing:
+    # the stance controller takes its whole effective-gravity reference from
+    # that signal.
+    #
+    # `open_loop_control: true` -- re-planning from the last COMMANDED position
+    # instead -- removes it completely, and on FLAT ground it is a clean win:
+    # a_z 9.901 +/- 0.017, body rates 0.000. On the TERRAIN it is not. The
+    # robot picks up a sustained 50 Hz roll oscillation, 1.4 rad/s rms and
+    # 90 m/s^2 at the IMU, which survives with every attitude gain in the
+    # stance controller set to zero -- so it is the leg loop against terrain
+    # contact, not the controller above it. Ground covered over the standard
+    # 12-leg course fell from 3.00 m to 1.28 m per 8 s run. Left FALSE, and the
+    # 100 Hz ripple is left to accel_tau, which is what that filter is for: the
+    # fast attitude path runs off the IMU quaternion, and the accelerometer
+    # only feeds slow consumers.
+    open_loop_control: false
     # The legs are a compliant servo working against terrain contact, so exact
     # goal tolerances are neither achievable nor useful here.
     constraints:

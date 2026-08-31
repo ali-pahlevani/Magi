@@ -15,6 +15,7 @@ install(
     scripts/magi_stabilizer.py
     scripts/magi_drive_benchmark.py
     scripts/magi_stability_test.py
+    scripts/magi_terrain_trial.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

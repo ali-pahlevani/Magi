@@ -49,7 +49,26 @@ magi_stabilizer:
     cmd_in: /cmd_vel
     cmd_out: /wheel_controller/cmd_vel_unstamped
 
-    ride_height: 0.40
+    # 0.36, not 0.40. Ride height is the one lever that raises BOTH tipping
+    # angles at once, because both are atan(half-dimension / h_com) and only
+    # h_com is free:
+    #
+    #                          h_com    roll tip   pitch tip
+    #   ride 0.40 (was)        0.311      31.4       31.9 deg
+    #   ride 0.36 (here)       0.271      35.0       35.5 deg
+    #
+    # Measured over the standard course, 8 s per leg: at 0.40 the robot covers
+    # 3.23 m and finishes upright 18/29; at 0.36 it covers 2.57 m and finishes
+    # upright 9/11. Twenty points of upright rate for twenty percent of the
+    # distance is the better end of that trade on this terrain. (The 0.36
+    # figure is one pass of the course against three for 0.40 -- the direction
+    # is geometry, the exact numbers are one sample.)
+    #
+    # It costs ground clearance, which on Rubicon is the expensive currency:
+    # the belly sits 0.303 m up instead of 0.343 m. That still clears every
+    # obstacle the robot can drive over anyway. Raise it back with
+    #   ros2 topic pub --once /magi/body_height std_msgs/msg/Float64 "{data: 0.40}"
+    ride_height: 0.36
     stand_time: 2.5
     startup_delay: 2.0
     # The attitude loop fades in over this long rather than switching on. A step
@@ -67,16 +86,26 @@ magi_stabilizer:
     # body rotation in one cycle.
     roll_kp: 0.75
     roll_ki: 0.60
-    roll_kd: 0.09
+    # 0.05, not 0.09. See the note in the node: the rate term acts through the
+    # command horizon, the leg controller and the ~20 Hz roll mode of the body
+    # on the hip PD, and at 0.09 with no filter on it the loop sustained a
+    # 19.5 Hz limit cycle at 3.9 rad/s rms -- +/-200 m/s^2 at the IMU, on a
+    # robot standing still. Everything that reads the accelerometer went with
+    # it. 0.05 through the command_tau pole below is damping in the band that
+    # matters and nothing at the mode.
+    roll_kd: 0.05
     pitch_kp: 0.55
     pitch_ki: 0.50
-    pitch_kd: 0.10
+    pitch_kd: 0.05
     tilt_i_max: 0.15
     tilt_max: 0.35
-    # Low-pass on the P+I path ONLY. The old node filtered the summed PID
-    # output, which put 0.1 s of lag on the rate term -- the one term whose
-    # whole job is to arrest a divergent roll before it becomes one.
-    command_tau: 0.08
+    # Low-pass on the WHOLE command now, rate term included, at 3.2 Hz. The
+    # previous version filtered P+I only and left D undelayed, which is the
+    # right instinct for a plant that can follow a rate command and the wrong
+    # one for this plant, which cannot: the loop was unstable at 19.5 Hz.
+    # Terrain disturbances are a few Hz at most, so this costs the loop nothing
+    # it was actually using.
+    command_tau: 0.05
     gyro_tau: 0.05
     # The accelerometer is the reference sensor now, so its filter matters.
     # Short enough to keep terrain impulses (a few Hz at most), long enough to
@@ -140,6 +169,24 @@ magi_stabilizer:
     # full width in 0.37 s, against 1.8 s for the old node's symmetric 0.12.
     reshape_rate_up: 0.30
     reshape_rate_down: 0.10
+    # The width lever only exists while the wheels are turning. Dragging four
+    # loaded wheels sideways costs mu*N through the stance height -- 17.3 N.m
+    # at the hip -- plus the splay moment, against a 23.7 N.m hip limit, so at
+    # rest the stance is friction-locked: measured, the front hips sat pinned
+    # at exactly 23.700 N.m and the splay did not move at all while standing,
+    # and came back to nominal within six seconds of rolling. Below
+    # reshape_roll_speed the rate fades to reshape_rest_gain of itself, and
+    # widen_band keeps the commanded width within reach of the achieved one so
+    # the hip PD never saturates on a difference it cannot close.
+    reshape_roll_speed: 0.30
+    reshape_rest_gain: 0.35
+    # 15 mm, and that number comes straight off the hip gain. Half-track moves
+    # 0.222 m per radian of hip at this stance, so 15 mm of width is 0.068 rad,
+    # which at p = 200 is 13.5 N.m of hip effort against a 23.7 N.m limit. A
+    # 30 mm band is 27 N.m all by itself and saturates the joint, which is the
+    # state this clamp exists to prevent; much below 15 mm and the stance can
+    # no longer lead the terrain at all.
+    widen_band: 0.015
     # 0.25 rad (14 deg), not 24. On Rubicon the robot genuinely stands on three
     # wheels much of the time, and a triangle's margin is well under the 31 deg
     # a square gives -- so a 24 deg target meant the stance was permanently
@@ -147,8 +194,25 @@ magi_stabilizer:
     margin_target: 0.25
     margin_tau: 0.20
     speed_calm: 0.25
-    speed_wide: 0.70
-    rough_ref: 0.35
+    # 1.20, not 0.70. "Go wide when moving fast" is sound, but 0.70 m/s is not
+    # fast for this machine and the term alone held the stance at full splay
+    # for any useful speed. Splaying is not free: at 0.110 m of widen the hips
+    # are out 23 deg, so the wheels are cambered 23 deg and roll on their rim
+    # edges, and the hips then have to drag them back in against mu*N -- which
+    # at 48 N per wheel through a 0.4 m stance is 19 N.m against a 23.7 N.m
+    # limit, i.e. barely feasible. Now that the acceleration envelope is
+    # measured correctly (it was pinned at its floor by a sign error), the
+    # governor is what protects a fast turn, and the stance can stay narrow
+    # until the speed genuinely warrants it.
+    speed_wide: 1.20
+    # 0.90 rad/s of body-rate RMS, not 0.35. This term feeds BOTH the stance
+    # width and the governor's speed ceiling, so saturating it costs speed
+    # twice over -- and 0.35 saturates on ordinary Rubicon at any useful pace.
+    # Part of that was self-inflicted: the attitude loop's own 19.5 Hz limit
+    # cycle put 3.9 rad/s into this estimate while the robot stood still. With
+    # the loop stable the figure is 0.005 rad/s at rest and 0.2-0.8 driving, so
+    # 0.90 marks genuinely violent ground rather than merely textured ground.
+    rough_ref: 0.90
     rough_tau: 1.0
     # Residual gyro noise after gyro_tau, removed in quadrature so a motionless
     # robot reports zero roughness instead of its own noise floor.
@@ -225,12 +289,57 @@ magi_stabilizer:
     # Speed ceiling over fully rough ground. This is the one limit not derived
     # from the tipping envelope, because the envelope only knows the ground the
     # wheels are on right now -- it cannot see the impulse coming.
-    v_rough_min: 0.35
+    #
+    # 0.60, not 0.35. With the roughness estimate pegged this was the robot's
+    # actual top speed everywhere on Rubicon, which is why it read as "hardly
+    # navigates". The estimate is honest now, so this applies to genuinely
+    # broken ground -- and 0.35 m/s is slower than the real machine crosses
+    # that, while still being a crawl next to the 1.5 m/s ceiling.
+    v_rough_min: 0.60
     # Speed still permitted with no margin left. NOT zero: a robot out of margin
     # is usually a robot on a slope, and driving off it is the way out. Zeroing
     # the command instead pinned it where it got into trouble, still sliding,
     # unable to accept any command that would have taken it somewhere flatter.
     v_crit_min: 0.25
+    # ...unless it is not on a slope but going over. Same critical margin,
+    # opposite right answer: there the drive torque is what completes the
+    # rollover, and the crawl floor above keeps applying it. Body rate is the
+    # discriminator -- a slope is static, a rollover is not -- and 1.5 rad/s
+    # sits above the 1-2 rad/s spikes a wheel crossing a facet produces while
+    # the robot is coping. Forward drive is cut for tip_stop_hold; reverse is
+    # still allowed, because backing off whatever was hit is the way out.
+    tip_stop_rate: 1.5
+    tip_stop_hold: 0.6
+    # And the wheelie latch. With mu 1.0, a CoM 0.311 m up and 0.1934 m of
+    # half-wheelbase, full tractive effort pitches this robot back harder than
+    # its wheelbase restores -- the no-wheelie condition is mu < 0.62, and mu
+    # is 1.0 because hill climbing needs it. A blocked front wheel is what
+    # reaches that: the rear wheels push into a wheel that cannot roll and
+    # stand the robot on its tail. Measured, it went from -7 to -84 deg of
+    # pitch in one second with the governor still commanding 1.00 m/s, because
+    # the tipping envelope is a steady-state measure and a wheelie is not.
+    # Both front wheels off the ground under a forward command is the signal.
+    # --- the rear-up guard -------------------------------------------------
+    # The pitch twin of the 31.4 deg roll figure at the top of this file:
+    # atan(half_wheelbase / h_com) = atan(0.1934/0.311) = 31.9 deg of nose-up
+    # is where the CoM passes behind the rear contacts. There is no lever
+    # against it -- widening is a roll remedy and the wheelbase is fixed -- so
+    # the only answer is to stop climbing.
+    #
+    # 0.35 rad (20 deg) arms it and 0.50 rad/s of FURTHER nose-up fires it.
+    # Both conditions are needed: entering a 25 deg slope pitches fast but only
+    # to 25 deg, and sitting on one is steep but no longer rotating. Only a
+    # rear-up is steep and still steepening. On the leg that used to fail 3/3
+    # this fires at about 22 deg, half a second before the point of no return.
+    rear_pitch: 0.35
+    rear_rate: 0.50
+    pitch_rate_tau: 0.10
+    rear_stop_hold: 0.8
+    # Low-pass on the mean wheel drive torque reported in /magi/balance_state.
+    # Diagnostic only, but a load-bearing one: it is what ruled out "the wheels
+    # are grinding against a rock" as the cause of the rear-ups (1.1 N.m of
+    # 23.7 while it happened -- the robot was climbing, not pushing).
+    drive_tau: 0.20
 
     # --- terrain preview ---------------------------------------------------
     # A plane fit to the lidar returns ahead of the robot. Widening takes
@@ -252,8 +361,31 @@ magi_stabilizer:
     preview_far: 5.40
     preview_half_width: 0.80
     preview_tau: 0.30
-    preview_rough_ref: 0.045
-    # The datasheet range precision, removed in quadrature. Without it a plane
-    # fit to flat ground reports ~0.7 cm of "roughness" that is pure sensor
-    # noise, which held the stance part-widened while standing still.
+    # 0.10 m of residual about the fitted QUADRATIC surface, not 0.045 about a
+    # plane. Two changes, one number. The plane fit scored a hill's curvature
+    # as roughness -- median 5.3 cm of residual on merely sloped ground, p90
+    # 16.5 cm, measured over 600 random placements -- so against 0.045 the
+    # preview read FULLY ROUGH over 57% of Rubicon and never came back down.
+    # The quadratic fit leaves only texture (median 3.4 cm, p90 8.6 cm), and
+    # 0.10 puts full urgency where ~7% of the map genuinely is broken ground
+    # instead of where most of it merely tilts.
+    preview_rough_ref: 0.10
+    # The datasheet range precision, removed in quadrature. Without it a fit to
+    # flat ground reports ~0.7 cm of "roughness" that is pure sensor noise,
+    # which held the stance part-widened while standing still.
     preview_rough_floor: 0.020
+    # Upcoming slope that counts as fully urgent, referenced to the angle the
+    # robot actually tips at (31 deg nominal, 46 deg splayed) rather than the
+    # 0.35 rad that used to be hard-coded in the node. Rubicon's slope at the
+    # robot's own footprint scale is p50 11 deg, p75 19 deg, p90 34 deg, so a
+    # 20 deg reference meant a quarter of the map was permanently "urgent".
+    preview_slope_ref: 0.60
+    # How far ahead in TIME the preview is allowed to act. The window sits
+    # 2.6-5.4 m out because the lidar cannot see the ground any closer, so at a
+    # walking pace its centre is eight seconds away -- and in a basin ringed by
+    # steep ground, something steep is always inside it. Ungated, that alone
+    # held the stance at full splay and the speed at the roughness floor no
+    # matter where the robot was or whether it was moving. 3 s is comfortably
+    # longer than the 0.4 s the stance takes to widen and the 1 s or so the
+    # governor needs to shed speed.
+    preview_lead: 3.0

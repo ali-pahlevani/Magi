@@ -44,13 +44,37 @@ Rubicon at speed, for four reasons that this node addresses one by one.
      while the robot is at rest, where the inertial part is zero by
      construction and the bias is therefore exactly what is left over.
 
-  4. ITS DAMPING TERM WAS DELAYED.
+  4. ITS DAMPING TERM WAS DELAYED -- AND UNDELAYING IT WAS A MISTAKE.
      The old loop summed P, I and D and put the SUM through a 0.1 s low-pass to
-     kill a 10 Hz limit cycle. That also delayed the D term -- the rate feedback
-     that is the only thing that arrests a divergent roll -- by 0.1 s on top of
-     the gyro filter. Here the low-pass is on the P+I path only, where the loop
-     shape problem actually was; rate damping runs at full loop rate and adds
-     phase lead rather than lag.
+     kill a 10 Hz limit cycle. This node was first written to filter the P+I
+     path only, on the argument that delaying D delays the one term that
+     arrests a divergent roll.
+
+     That reasoning is right about what D is for and wrong about what this
+     plant can carry, and it cost more than everything else here gained. The
+     command is a body ATTITUDE realised through differential leg length; the
+     path from asking for it to the body rolling runs through the command
+     horizon, the trajectory controller, and the ~20 Hz mode of the body
+     bouncing in roll against the hip PD, which is 180 deg of phase well before
+     20 Hz. Undelayed rate feedback there is not damping, it is gain.
+
+     Measured, standing still on level ground:
+
+         kd 0.09/0.10, D unfiltered    roll rate 3.9 rad/s rms, 19.5 Hz
+         kd 0                          roll rate 0.10 rad/s rms
+
+     The accelerometer saw +/-200 m/s^2 of lateral acceleration during that
+     limit cycle -- 20 g, on a stationary robot -- and everything downstream
+     reads the accelerometer. The effective-gravity reference became garbage
+     (a_y 130 m/s^2 against a_z 14), so the margin reported -32 deg on an
+     upright robot, the acceleration envelope collapsed, urgency pinned at
+     1.00, the stance splayed to its limit and stayed there, and the governor
+     held the robot at its roughness crawl. It was not being conservative; it
+     was shaking itself blind.
+
+     So the low-pass is back on the whole command, at command_tau, and kd comes
+     down to 0.05. Terrain disturbance is a few Hz at most, which is inside
+     what the loop can still carry.
 
 Also, the old configuration left most of the robot's stability on the table.
 Measured from the kinematics (see the table in magi_stabilizer.yaml): the
@@ -115,6 +139,41 @@ while splayed, commanded yaw rate under-delivers and the odometry message
 over-reads yaw. The EKF is unaffected -- ekf.yaml takes vx only from odom0 and
 yaw rate from the IMU -- and the current effective track is published on
 /magi/stance_width so the discrepancy stays visible.
+
+WHAT WAS MEASURABLY BROKEN, BESIDES THAT
+----------------------------------------
+Four more faults, each found by measurement and each worth its own note in
+magi_stabilizer.yaml:
+
+  * THE ACCELERATION ENVELOPE WAS NEVER COMPUTED. `_accel_envelope` built its
+    effective-gravity vector as -down*G, which points UP, so every bisection
+    probe failed the "pattern must be below the CoM" test and both searches
+    returned a_lat_floor unconditionally. The governor had been running on a
+    hard-coded 0.8 m/s^2 of lateral authority whatever the stance was good for
+    -- 10.0 m/s^2 at full splay.
+
+  * THE TERRAIN PREVIEW SCORED HILLS AS ROUGHNESS. A plane fit over a 2.8 m
+    window leaves a hill's curvature in the residual. Measured over 600 random
+    placements on Rubicon the plane residual is p50 5.3 cm and p90 16.5 cm on
+    ground that is merely sloped, against a 4.5 cm "fully rough" reference --
+    so the preview read FULLY ROUGH over 57% of the map. It fits a quadratic
+    now (p50 3.4 cm), and both it and the slope term are gated by time to
+    arrival, because the lidar cannot see the ground closer than 2.69 m and at
+    a walking pace that window is eight seconds away.
+
+  * THE STANCE WAS FRICTION-LOCKED. Dragging four loaded wheels sideways costs
+    mu*N through the stance height, 17.3 N.m at the hip, on top of the splay
+    moment, against a 23.7 N.m limit. Measured standing on Rubicon at 0.413 rad
+    of splay with the target set back to nominal: both front hips pinned at
+    exactly -23.700 N.m and the splay did not move for as long as the robot
+    stood there, through a sweep of widen_max from 0.110 to 0. Six seconds of
+    rolling brought the same joint back to 0.038 rad. The lever is gated on
+    rolling now, and the command is kept within reach of the achieved stance.
+
+  * NOTHING GUARDED THE PITCH AXIS. The whole design is built around the
+    31.4 deg roll tipping angle; the pitch twin, atan(0.1934/0.311) = 31.9 deg
+    of nose-up, had no lever and no guard. The robot drove onto faces steeper
+    than that and went over backwards. See the rear-up guard in _govern.
 
 WHAT IT ACTUALLY DOES, MEASURED
 ------------------------------
@@ -251,7 +310,7 @@ class MagiStabilizer(Node):
         p("cmd_in", "/cmd_vel")
         p("cmd_out", "/wheel_controller/cmd_vel_unstamped")
 
-        p("ride_height", NAMED_POSTURES["stand"])
+        p("ride_height", 0.36)        # see the note in magi_stabilizer.yaml
         p("stand_time", 2.5)
         p("startup_delay", 2.0)
         p("authority_ramp", 0.75)      # s to fade the attitude loop in
@@ -262,14 +321,14 @@ class MagiStabilizer(Node):
         # need no separate feed-forward.
         p("roll_kp", 0.75)
         p("roll_ki", 0.60)
-        p("roll_kd", 0.09)
+        p("roll_kd", 0.05)
         p("pitch_kp", 0.55)
         p("pitch_ki", 0.50)
-        p("pitch_kd", 0.10)
+        p("pitch_kd", 0.05)
         p("tilt_i_max", 0.15)
         p("tilt_max", 0.35)
         # Low-pass on the P+I path ONLY. The D term bypasses it.
-        p("command_tau", 0.08)
+        p("command_tau", 0.05)
         p("gyro_tau", 0.05)
         p("accel_tau", 0.20)          # s, low-pass on the accelerometer
         # The lean reference is the inertial part of the measured gravity
@@ -302,13 +361,16 @@ class MagiStabilizer(Node):
         # 0.6 s. But scrub is a cost worth paying instantly to avoid a rollover
         # and not worth paying at all to get back to nominal, so going wide is
         # fast and coming back is slow.
+        p("reshape_roll_speed", 0.30)   # m/s for the full reshape rate
+        p("reshape_rest_gain", 0.35)    # fraction of it available at a standstill
+        p("widen_band", 0.015)          # m the command may lead the real stance
         p("reshape_rate_up", 0.30)    # m/s toward safety
         p("reshape_rate_down", 0.10)  # m/s back to nominal
         p("margin_target", 0.25)      # rad (14 deg); below this, reshape
         p("margin_tau", 0.20)
         p("speed_calm", 0.25)         # m/s below which no anticipation
-        p("speed_wide", 0.70)         # m/s at which the stance is fully wide
-        p("rough_ref", 0.35)          # rad/s RMS body rate = fully wide
+        p("speed_wide", 1.20)         # m/s at which the stance is fully wide
+        p("rough_ref", 0.90)          # rad/s RMS body rate = fully wide
         p("rough_tau", 1.0)
         p("rough_floor", 0.080)       # rad/s of residual gyro noise
         # 0.110 m of extra half-track takes the track from 0.380 to 0.600 m and
@@ -350,8 +412,15 @@ class MagiStabilizer(Node):
         p("cmd_timeout", 0.5)         # s without input -> stop
         p("a_lat_floor", 0.8)         # m/s^2 -- never govern below this
         p("a_lat_ceiling", 12.0)      # m/s^2 -- bisection upper bracket
-        p("v_rough_min", 0.35)        # m/s ceiling over fully rough ground
+        p("v_rough_min", 0.60)        # m/s ceiling over fully rough ground
         p("v_crit_min", 0.25)         # m/s still allowed with no margin left
+        p("tip_stop_rate", 1.5)       # rad/s: critical margin + this = going over
+        p("tip_stop_hold", 0.6)       # s the drive stays cut after it triggers
+        p("drive_tau", 0.20)          # s, low-pass on the wheel-torque readout
+        p("rear_pitch", 0.35)         # rad of nose-up before the rear-up guard arms
+        p("rear_rate", 0.50)          # rad/s of further nose-up that triggers it
+        p("pitch_rate_tau", 0.10)     # s, low-pass on the measured pitch rate
+        p("rear_stop_hold", 0.8)      # s the drive stays cut after the guard fires
 
         # ---- terrain preview -----------------------------------------------
         p("preview_enable", True)
@@ -362,7 +431,9 @@ class MagiStabilizer(Node):
         p("preview_far", 5.40)        # m ahead, end of the window
         p("preview_half_width", 0.80)
         p("preview_tau", 0.30)
-        p("preview_rough_ref", 0.045)  # m RMS of plane residual = fully rough
+        p("preview_rough_ref", 0.10)  # m RMS of surface residual = fully rough
+        p("preview_slope_ref", 0.60)  # rad of upcoming slope = fully urgent
+        p("preview_lead", 3.0)        # s; ground further off than this is ignored
         p("preview_rough_floor", 0.020)  # m, the lidar's own range noise
 
         self.rate = float(self.get_parameter("rate").value)
@@ -392,6 +463,12 @@ class MagiStabilizer(Node):
         self.margin_pred = 0.0
         self.cop_margin = 0.0         # metres, published for continuity
         self.rough_sq = 0.0
+        self.tip_stop_until = 0.0     # see the tip-stop latch in _govern
+        self.rear_stop_until = 0.0    # see the wheelie latch in _govern
+        self.drive_effort = 0.0       # mean |wheel torque|, low-passed
+        self.pitch_rate = 0.0         # rad/s, nose-down positive
+        # margin, speed, body roughness, commanded lateral, preview, slope
+        self.u_terms = (0.0,) * 6
         self.urgency = 0.0
         self.i_roll = self.i_pitch = 0.0
         self.pi_roll_f = self.pi_pitch_f = 0.0
@@ -479,12 +556,31 @@ class MagiStabilizer(Node):
                     for part in ("hip", "thigh", "calf"))
             except (KeyError, IndexError):
                 return
+        # Wheel drive torque, low-passed. This is the robot's own ammeter and
+        # it says something nothing else in the stack can: whether the wheels
+        # are DRIVING or PUSHING. See the stall latch in _govern.
+        try:
+            drive = sum(abs(msg.effort[index[f"{leg}_foot_joint"]])
+                        for leg in LEGS) / 4.0
+        except (KeyError, IndexError):
+            return
+        tau = float(self.get_parameter("drive_tau").value)
+        a = 0.005 / (tau + 0.005)              # joint_states arrives at 200 Hz
+        self.drive_effort += a * (drive - self.drive_effort)
 
     def _on_imu(self, msg):
         q = msg.orientation
         self.roll = math.atan2(2.0 * (q.w * q.x + q.y * q.z),
                                1.0 - 2.0 * (q.x * q.x + q.y * q.y))
-        self.pitch = math.asin(clamp(2.0 * (q.w * q.y - q.z * q.x), -1.0, 1.0))
+        pitch = math.asin(clamp(2.0 * (q.w * q.y - q.z * q.x), -1.0, 1.0))
+        # Rate of the ATTITUDE estimate rather than the raw gyro, so the sign
+        # convention is the same one the rear-up guard's threshold is written
+        # in and cannot be got backwards. Filtered at pitch_rate_tau, long
+        # enough that a wheel dropping off a facet does not register.
+        prate = (pitch - self.pitch) * float(self.get_parameter("rate").value)
+        a = 0.005 / (float(self.get_parameter("pitch_rate_tau").value) + 0.005)
+        self.pitch_rate += a * (prate - self.pitch_rate)
+        self.pitch = pitch
 
         dt = 1.0 / 200.0                       # IMU rate, from the URDF sensor
         a = dt / (float(self.get_parameter("gyro_tau").value) + dt)
@@ -585,27 +681,68 @@ class MagiStabilizer(Node):
         if np.ptp(window[:, 0]) < 0.80 or np.ptp(window[:, 1]) < 0.50:
             return
 
-        # Least-squares plane z = c0 + c1 x + c2 y over the window.
-        a = np.column_stack([np.ones(window.shape[0]), window[:, 0], window[:, 1]])
+        # Least-squares QUADRATIC z = c0 + c1x + c2y + c3x^2 + c4xy + c5y^2.
+        #
+        # The window is 2.8 m deep. Over that distance a HILL is not a plane,
+        # and a plane fit to one leaves its curvature in the residual -- which
+        # this node would then read as roughness. Measured over 600 random
+        # placements on Rubicon, the plane residual has a median of 5.3 cm and
+        # a p90 of 16.5 cm on ground that is merely sloped, so against the
+        # 4.5 cm reference the preview reported FULLY ROUGH on 57% of the map.
+        # The consequences were not subtle: urgency pinned at 1.00, the stance
+        # permanently splayed to its 0.600 m limit, and the governor holding
+        # the robot at its v_rough_min crawl of 0.35 m/s no matter what was
+        # commanded. That is the whole "it hardly moves" complaint.
+        #
+        # Adding the six quadratic terms puts curvature in the MODEL instead of
+        # the residual: median 3.4 cm, p90 8.6 cm. What is left is texture --
+        # rocks, ruts, steps -- which is what the term is supposed to measure.
+        # The linear coefficients still give the slope, unchanged.
+        x_w, y_w, z_w = window[:, 0], window[:, 1], window[:, 2]
+        a = np.column_stack([np.ones(window.shape[0]), x_w, y_w,
+                             x_w * x_w, x_w * y_w, y_w * y_w])
         try:
-            coef, *_ = np.linalg.lstsq(a, window[:, 2], rcond=None)
+            # lstsq is minimum-norm under rank deficiency, so a window that
+            # happens to catch only two lidar rings degrades to the plane fit
+            # rather than blowing up.
+            coef, *_ = np.linalg.lstsq(a, z_w, rcond=None)
         except np.linalg.LinAlgError:
             return
-        residual = window[:, 2] - a @ coef
+        residual = z_w - a @ coef
         slope = math.atan(math.hypot(coef[1], coef[2]))
         # Range noise is 2 cm stddev by the datasheet and the sensor model, so a
-        # plane fit to genuinely flat ground still shows that much scatter.
-        # Removed in quadrature, exactly as the gyro floor is, so smooth ground
-        # reports zero roughness instead of the sensor's own noise -- otherwise
-        # the stance sits permanently part-widened with nothing happening.
+        # fit to genuinely flat ground still shows that much scatter. Removed in
+        # quadrature, exactly as the gyro floor is, so smooth ground reports
+        # zero roughness instead of the sensor's own noise -- otherwise the
+        # stance sits permanently part-widened with nothing happening.
         floor = float(self.get_parameter("preview_rough_floor").value)
         raw_rough = float(np.sqrt(np.mean(residual * residual)))
         rough = math.sqrt(max(raw_rough * raw_rough - floor * floor, 0.0))
 
+        # GATED BY TIME TO ARRIVAL. The MID-360 looks only 7 deg below its own
+        # horizon, so from 0.50 m up its lowest ray does not reach the ground
+        # until 2.69 m out -- the preview window cannot be moved closer. At
+        # 0.5 m/s the middle of that window is eight seconds away, and levers
+        # that take 0.4 s to move have no business reacting to it: on a basin
+        # world like Rubicon there is a steep wall within 5.4 m of almost
+        # anywhere, so an ungated preview held the stance splayed and the
+        # governor at its crawl floor permanently, including while the robot
+        # was standing still with the window pointing at a hillside it was
+        # never going to drive into.
+        #
+        # The gate is the fraction of preview_lead that the window actually
+        # falls inside at the current speed: full weight when the robot will be
+        # there within preview_lead seconds, fading to nothing when it is not
+        # going anywhere near it.
+        lead = float(self.get_parameter("preview_lead").value)
+        centre = 0.5 * (near + far)
+        eta = centre / max(abs(self.v_out), 1e-3)
+        gate = clamp(lead / max(eta, 1e-3), 0.0, 1.0)
+
         tau = float(self.get_parameter("preview_tau").value)
         alpha = 0.1 / (tau + 0.1)              # cloud arrives at 10 Hz
-        self.preview_slope += alpha * (slope - self.preview_slope)
-        self.preview_rough += alpha * (rough - self.preview_rough)
+        self.preview_slope += alpha * (gate * slope - self.preview_slope)
+        self.preview_rough += alpha * (gate * rough - self.preview_rough)
 
     # ---- stability measurement --------------------------------------------
     def _geometry(self):
@@ -741,7 +878,15 @@ class MagiStabilizer(Node):
         safe = float(self.get_parameter("tip_margin_safe").value)
         floor = float(self.get_parameter("a_lat_floor").value)
         ceiling = float(self.get_parameter("a_lat_ceiling").value)
-        g_vec = -down * G      # effective gravity as a vector, m/s^2
+        # `down` is the unit vector along effective gravity, so the vector form
+        # is +down * G. It was -down * G, which points UP: force_line_inside
+        # then rejected every candidate ("the pattern has to be BELOW the CoM
+        # along the force direction"), every bisection probe came back
+        # negative, and both searches returned a_lat_floor unconditionally. The
+        # governor has therefore been running on a hard-coded 0.8 m/s^2 of
+        # lateral authority since the envelope was written, whatever the stance
+        # was actually good for -- 10.0 m/s^2 at full splay.
+        g_vec = down * G       # effective gravity as a vector, m/s^2
 
         def margin_at(extra):
             # A commanded acceleration `extra` is felt as a pseudo-force in the
@@ -964,17 +1109,50 @@ class MagiStabilizer(Node):
         # The low-pass belongs HERE and nowhere else. The old node filtered the
         # whole PID output, which delayed the rate term by 0.1 s -- the term
         # that stops a divergent roll was the most delayed signal in the loop.
+        # THE LOW-PASS GOES ON THE WHOLE COMMAND, INCLUDING THE RATE TERM.
+        #
+        # An earlier version filtered only the P+I path, on the argument that
+        # delaying the rate term delays the one signal that arrests a divergent
+        # roll. That argument is right about what the rate term is for and
+        # wrong about what the loop can carry, and the cost was the single
+        # worst behaviour in the stack.
+        #
+        # This command is a body ATTITUDE, realised through differential leg
+        # length and tracked by a stiff joint PD. Between asking for it and the
+        # body actually rolling there is the 0.03 s command horizon, the leg
+        # controller, and the ~20 Hz mode of the body bouncing in roll against
+        # the hip PD. That chain passes 180 deg of lag well before 20 Hz, so an
+        # UNFILTERED rate term is not damping there -- it is positive feedback.
+        #
+        # Measured, standing still on level ground:
+        #
+        #   kd 0.09 / 0.10, D unfiltered   roll rate 3.9 rad/s rms, 19.5 Hz
+        #   kd 0.0                         roll rate 0.10 rad/s rms
+        #
+        # The accelerometer saw +/-200 m/s^2 of lateral acceleration during
+        # that limit cycle, which is 20 g on a stationary robot. Everything
+        # downstream reads the IMU: the effective-gravity reference became
+        # garbage (a_y 130 m/s^2 against a_z 14), so the stability margin
+        # reported -32 deg on an upright robot, the acceleration envelope
+        # collapsed to its floor, urgency pinned at 1.00, the stance splayed to
+        # its limit and stayed there, and the governor held the robot at its
+        # roughness crawl. The robot was not being conservative -- it was
+        # shaking itself blind.
+        #
+        # One pole at command_tau on the sum puts the loop gain 6x down by
+        # 20 Hz, which is where the mode is, while leaving the rate term intact
+        # across the few Hz that terrain disturbances actually occupy.
         c_tau = float(self.get_parameter("command_tau").value)
         a = self.dt / (c_tau + self.dt)
-        self.pi_roll_f += a * (pi_roll - self.pi_roll_f)
-        self.pi_pitch_f += a * (pi_pitch - self.pi_pitch_f)
+        raw_roll = (pi_roll + bias_roll
+                    - float(self.get_parameter("roll_kd").value) * self.wx)
+        raw_pitch = (pi_pitch + bias_pitch
+                     - float(self.get_parameter("pitch_kd").value) * self.wy)
+        self.pi_roll_f += a * (raw_roll - self.pi_roll_f)
+        self.pi_pitch_f += a * (raw_pitch - self.pi_pitch_f)
 
-        d_roll = (self.pi_roll_f + bias_roll
-                  - float(self.get_parameter("roll_kd").value) * self.wx)
-        d_pitch = (self.pi_pitch_f + bias_pitch
-                   - float(self.get_parameter("pitch_kd").value) * self.wy)
-        d_roll = authority * clamp(d_roll, -tilt_max, tilt_max)
-        d_pitch = authority * clamp(d_pitch, -tilt_max, tilt_max)
+        d_roll = authority * clamp(self.pi_roll_f, -tilt_max, tilt_max)
+        d_pitch = authority * clamp(self.pi_pitch_f, -tilt_max, tilt_max)
 
         # ---- reshaping -----------------------------------------------------
         r_tau = float(self.get_parameter("rough_tau").value)
@@ -1028,10 +1206,23 @@ class MagiStabilizer(Node):
             u_cmd = clamp(demand / avail, 0.0, 1.0)
             # Upcoming slope, from the lidar. A side slope eats the margin
             # before the robot is on it, and widening takes time.
-            u_slope = clamp(self.preview_slope / 0.35, 0.0, 1.0)
+            #
+            # Referenced to the TIPPING ANGLE, not to a fixed 0.35 rad. The
+            # hard-coded 20 deg was below this terrain's 75th percentile slope,
+            # so merely being on a hill was scored as maximum urgency and the
+            # stance never came back in. Full urgency belongs where the ground
+            # ahead approaches the angle the robot actually tips at.
+            u_slope = clamp(self.preview_slope
+                            / max(float(self.get_parameter(
+                                "preview_slope_ref").value), 1e-3), 0.0, 1.0)
             urgency = max(u_margin, u_speed, u_rough, u_cmd, u_preview, u_slope)
         else:
+            u_margin = u_speed = u_cmd = u_slope = 0.0
             urgency = 0.0
+        # Kept for the state string. Which of the six terms is driving the
+        # stance is the first thing anyone asks when the robot is splayed and
+        # crawling, and it used to take a code change to find out.
+        self.u_terms = (u_margin, u_speed, u_rough, u_cmd, u_preview, u_slope)
         # Smoothed, because every input to it is noisy and the levers it drives
         # move real mass. Rising is quick, falling is slow -- the same asymmetry
         # the rate limits use, and for the same reason.
@@ -1056,6 +1247,31 @@ class MagiStabilizer(Node):
         goal = reach_max if (authority > 0.0 and not contact_ok) else 0.0
         self.reach += clamp(goal - self.reach, -reach_step, reach_step)
 
+        # RESHAPING THE STANCE MEANS DRAGGING LOADED WHEELS SIDEWAYS, and the
+        # hip cannot do that standing still. The lateral resistance is mu*N
+        # through the stance height -- 1.0 * 48 N * 0.36 m = 17.3 N.m -- on top
+        # of the 12.2 N.m of static splay moment at full width, against a hip
+        # limit of 23.7 N.m.
+        #
+        # Measured, standing on Rubicon at a splay of 0.413 rad with the target
+        # set back to the nominal stance: both front hips sat at exactly
+        # -23.700 N.m, saturated, and the splay did not move by one milliradian
+        # for as long as the robot stood there -- through a sweep of widen_max
+        # from 0.110 all the way to 0. Six seconds of rolling at 0.6 m/s
+        # brought the same joint back to 0.038 rad with 10.6 N.m of effort.
+        #
+        # So the width lever is available only while the wheels are turning,
+        # where the drive force shares the friction cone and lateral resistance
+        # collapses. Asking for it at rest does not widen the stance; it just
+        # holds both hip motors against their stops, which on the real machine
+        # is a thermal fault rather than a stance.
+        roll_speed = float(self.get_parameter("reshape_roll_speed").value)
+        rest_gain = float(self.get_parameter("reshape_rest_gain").value)
+        roll_gate = clamp(abs(self.v_out) / max(roll_speed, 1e-3),
+                          rest_gain, 1.0)
+        up_step *= roll_gate
+        down_step *= roll_gate
+
         widen_goal = urgency * float(self.get_parameter("widen_max").value)
         # Crouch is withdrawn as the ground gets rough -- clearance beats a
         # lower CoM once the belly is at risk, and grounding out on Rubicon has
@@ -1067,6 +1283,18 @@ class MagiStabilizer(Node):
             crouch_goal = 0.0
         self.widen += clamp(widen_goal - self.widen, -down_step, up_step)
         self.crouch += clamp(crouch_goal - self.crouch, -down_step, up_step)
+
+        # And the command is kept within reach of what the hips have actually
+        # achieved. The rate gate above stops the target running away quickly;
+        # this stops it running away at all. Without it the commanded width and
+        # the real one drift apart until the hip PD saturates on the difference
+        # and stays there -- the state the robot was measured in above.
+        band = float(self.get_parameter("widen_band").value)
+        achieved = (sum(abs(leg_fk(leg, *self.q[leg])[1]) for leg in LEGS) / 4.0
+                    - HALF_TRACK_NOM)
+        self.widen = clamp(self.widen, achieved - band, achieved + band)
+        self.widen = clamp(self.widen, 0.0,
+                           float(self.get_parameter("widen_max").value))
 
         # ---- foot targets and IK -------------------------------------------
         half_track = HALF_TRACK_NOM + self.widen
@@ -1174,6 +1402,67 @@ class MagiStabilizer(Node):
             self.a_lat, self.a_lon = self._accel_envelope(pattern, com, down)
             crit = float(self.get_parameter("tip_margin_crit").value)
 
+            # 0. THE WHEELIE. This robot rears up under hard tractive effort,
+            #    and that is geometry, not tuning: the CoM sits 0.311 m above
+            #    the contacts with only 0.1934 m of half-wheelbase behind it,
+            #    so a forward ground force pitches the body back harder than
+            #    the wheelbase can restore once
+            #
+            #        mu > half_wheelbase / h_com = 0.1934 / 0.311 = 0.62
+            #
+            #    and mu is 1.0, chosen for hill climbing. Driving normally
+            #    never reaches that -- accelerating at the governed 1.5 m/s^2
+            #    needs 29 N against the 191 N the ground could deliver -- but
+            #    a BLOCKED FRONT WHEEL does. The rear wheels keep pushing into
+            #    a wheel that cannot roll and the couple stands the robot on
+            #    its tail.
+            #
+            #    Measured on the standard course: the robot reared from -7 deg
+            #    to -84 deg of pitch in one second, travelling 0.1 m, and went
+            #    over backwards -- with the governor still commanding 1.00 m/s
+            #    the whole way, because the tipping envelope is a steady-state
+            #    measure and this is not steady state.
+            #
+            #    The limit is geometric and it is the pitch twin of the
+            #    31.4 deg roll figure this node is built around:
+            #
+            #        atan(half_wheelbase / h_com) = atan(0.1934 / 0.311)
+            #                                     = 31.9 deg
+            #
+            #    Past that, nose up, the CoM is behind the rear contacts and
+            #    the robot goes over its own tail. There is no lever against
+            #    it: widening the stance is a ROLL remedy, and the wheelbase
+            #    is fixed. Refusing to keep climbing is the whole answer.
+            #
+            #    Measured on the standard course, the leg that failed 3/3:
+            #    the robot drove onto a face steeper than that, pitched
+            #    -7 -> -16 -> -22 -> -34 deg over 0.75 s and went over
+            #    backwards. Wheel torque stayed at 1.1 N.m throughout -- it
+            #    was not pushing against anything, it was climbing something
+            #    it should not have climbed -- and foot contact still reported
+            #    all four wheels loaded at 73 deg of pitch, so neither is any
+            #    use as the trigger.
+            #
+            #    ALREADY STEEP **AND** STILL GETTING STEEPER is what separates
+            #    this from a legitimate climb. Entering a 25 deg slope pitches
+            #    the body fast but only to 25 deg; sitting on one is steep but
+            #    no longer rotating. Only a rear-up is both at once.
+            #
+            #    Cutting for rear_stop_hold and then letting the command back
+            #    gives a push-pause-push stutter rather than a refusal, so an
+            #    operator can still work at an obstacle. Reverse is never cut:
+            #    backing off is the way out.
+            now_s = self.get_clock().now().nanoseconds * 1e-9
+            nose_up = -self.pitch
+            if (self.v_out > 0.2
+                    and nose_up > float(self.get_parameter("rear_pitch").value)
+                    and -self.pitch_rate
+                    > float(self.get_parameter("rear_rate").value)):
+                self.rear_stop_until = now_s + float(
+                    self.get_parameter("rear_stop_hold").value)
+            if now_s < self.rear_stop_until:
+                v_req = min(v_req, 0.0)
+
             # 1. Speed ceiling from the terrain. This is the one limit that
             #    does not come from the tipping envelope: rough ground rolls
             #    the robot through impulses the envelope cannot see, because
@@ -1225,11 +1514,43 @@ class MagiStabilizer(Node):
             #    wherever it had got into trouble, still sliding, unable to
             #    accept any command that would have taken it somewhere flatter.
             if self.margin_pred < crit:
-                fade = clamp(self.margin_pred / max(crit, 1e-3), 0.0, 1.0)
-                w_req *= fade
-                crawl = float(self.get_parameter("v_crit_min").value)
-                ceiling = crawl + fade * (self.v_limit - crawl)
-                v_req = clamp(v_req, -ceiling, ceiling)
+                # A critical margin has two completely different causes and
+                # they need opposite responses.
+                #
+                #   on a slope    the margin is small because the ground is
+                #                 tilted. Driving off it is the way out, which
+                #                 is why the crawl floor below is not zero: an
+                #                 earlier version faded to a standstill and
+                #                 simply pinned the robot where it got into
+                #                 trouble, still sliding.
+                #   going over    the margin is small because the robot just
+                #                 hit something and is already rotating. Here
+                #                 the drive torque is what finishes the
+                #                 rollover, and a crawl floor keeps applying it.
+                #
+                # The discriminator is body rate: a slope is static, a rollover
+                # is not. Measured on the standard course, the rollovers left
+                # after the rest of these fixes were overwhelmingly of the
+                # second kind -- 8 of 12 at the two start poses that have a
+                # boulder within a metre, reached at 0.7 m/s where the stock
+                # configuration had been too slow to get there at all.
+                #
+                # Reverse is deliberately still allowed while latched: backing
+                # off whatever was hit is exactly the command that helps.
+                rate = math.hypot(self.wx, self.wy)
+                now_s = self.get_clock().now().nanoseconds * 1e-9
+                if rate > float(self.get_parameter("tip_stop_rate").value):
+                    self.tip_stop_until = now_s + float(
+                        self.get_parameter("tip_stop_hold").value)
+                if now_s < self.tip_stop_until:
+                    v_req = min(v_req, 0.0)
+                    w_req = 0.0
+                else:
+                    fade = clamp(self.margin_pred / max(crit, 1e-3), 0.0, 1.0)
+                    w_req *= fade
+                    crawl = float(self.get_parameter("v_crit_min").value)
+                    ceiling = crawl + fade * (self.v_limit - crawl)
+                    v_req = clamp(v_req, -ceiling, ceiling)
         else:
             self.v_limit = v_max
 
@@ -1262,9 +1583,13 @@ class MagiStabilizer(Node):
         point = JointTrajectoryPoint()
         point.positions = [command[leg][i] for leg in LEGS for i in range(3)]
         point.velocities = [0.0] * len(JOINT_NAMES)
+        # Read live rather than cached, so the horizon can be swept against a
+        # running robot -- it is the dominant term in the phantom velocity
+        # described below and is not something to get right by guessing.
+        horizon = float(self.get_parameter("command_horizon").value)
         point.time_from_start = Duration(
-            sec=int(self.horizon),
-            nanosec=int((self.horizon % 1.0) * 1e9))
+            sec=int(horizon),
+            nanosec=int((horizon % 1.0) * 1e9))
 
         traj = JointTrajectory()
         traj.joint_names = JOINT_NAMES
@@ -1311,9 +1636,11 @@ class MagiStabilizer(Node):
                  f"tip={math.degrees(self.margin):+.1f}/"
                  f"{math.degrees(self.margin_pred):+.1f}deg "
                  f"track={2 * (HALF_TRACK_NOM + self.widen):.3f} "
-                 f"urg={self.urgency:.2f} "
+                 f"urg={self.urgency:.2f}"
+                 f"[{'/'.join('%.2f' % u for u in self.u_terms)}] "
                  f"alat={self.a_lat[0]:.1f}/{self.a_lat[1]:.1f} "
                  f"cmd={self.v_out:+.2f}/{self.w_out:+.2f} "
+                 f"drv={self.drive_effort:.1f}Nm "
                  f"prev={math.degrees(self.preview_slope):.0f}deg/"
                  f"{self.preview_rough * 100:.1f}cm "
                  f"rp={math.degrees(self.roll):+.1f}/{math.degrees(self.pitch):+.1f}deg")
