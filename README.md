@@ -2,75 +2,80 @@
 
 ![MAGI](docs/images/Magi.png)
 
-ROS 2 Humble + Gazebo Sim (Harmonic) simulation of the **Unitree Go2W**, a
-wheeled quadruped with 16 actuated joints (12 leg joints + 4 drive wheels),
-driving, mapping and navigating the Rubicon terrain. Control is
-`ros2_control`-based; state estimation, 3D SLAM and Nav2 are all wired up, and
-every claim below is measured against simulator ground truth.
+A ROS 2 Humble + Gazebo Harmonic simulation of the Unitree Go2W wheeled
+quadruped (12 leg joints, 4 drive wheels) on the Rubicon terrain. It includes
+`ros2_control` controllers, a stance controller, EKF state estimation, 3D lidar
+SLAM with RTAB-Map, and autonomous navigation with Nav2.
 
-| Rubicon, wide | The Go2W on the terrain |
+| Rubicon world | Go2W on the terrain |
 |---|---|
-| ![Rubicon wide view](docs/images/rubicon_world_1.png) | ![Go2W close-up](docs/images/rubicon_world_2.png) |
+| ![Rubicon world](docs/images/rubicon_world_1.png) | ![Go2W close-up](docs/images/rubicon_world_2.png) |
 
 ## Quick start
+
+Build the workspace first (see [Build](#build)), then:
 
 ```bash
 ros2 launch magi_launch magi_test.launch.py
 ```
 
-Starts Gazebo, spawns the robot, activates the controllers, brings up state
-estimation and the stance controller, and opens keyboard teleop and RViz. Turn
-either window off with `gui:=false` / `rviz:=false`.
+This starts Gazebo, spawns the robot, starts the controllers, state estimation
+and the stance controller, and opens keyboard teleop and RViz. Use
+`gui:=false` or `rviz:=false` to skip either window.
 
-To map, then navigate — the second command needs the map the first one saves:
+Mapping and navigation:
 
 ```bash
-ros2 launch magi_launch magi_test.launch.py slam:=true   # drive around, Ctrl-C saves
-ros2 launch magi_launch magi_nav.launch.py               # then click 2D Goal Pose
+# 1. Build a map: drive around with teleop, then Ctrl-C to save it
+ros2 launch magi_launch magi_test.launch.py slam:=true
+
+# 2. Navigate on the saved map: set a goal with "2D Goal Pose" in RViz
+ros2 launch magi_launch magi_nav.launch.py
 ```
 
-`magi_bringup` underneath is the simulation stack alone:
+The simulation stack on its own:
 
 ```bash
 ros2 launch magi_bringup magi_sim.launch.py teleop:=true
-ros2 launch magi_control teleop.launch.py          # or teleop in a second terminal
+ros2 launch magi_control teleop.launch.py      # teleop in a separate terminal
 ```
 
-Startup is staged (`spawn_delay` / `controllers_delay` / `rviz_delay`), with a
-longer stagger when the Gazebo GUI has 342 MB of terrain to build. RViz opens
-last on purpose, so `/robot_description` is latched and `odom -> base` is live
-by the time it appears.
+Startup is staged with timers (`spawn_delay`, `controllers_delay`,
+`rviz_delay`). The delays are longer with the Gazebo GUI because it has to load
+342 MB of terrain first. RViz starts last so that `/robot_description` and
+`odom -> base` are already available when it opens.
 
-**The odometry view** (`magi_launch/rviz/magi_odometry.rviz`) is laid out to make
-odometry *checkable* rather than pretty. Fixed Frame is `odom` and the camera
-deliberately does not follow the robot — tracking `base` would leave the robot
-still while the world slid past, hiding exactly what needs watching. Two trails
-are drawn: **green** is the EKF's `/odometry/filtered`, **red** is raw
-`/wheel_controller/odom`, and the red one swings away the moment you turn:
+### Odometry view
 
-| over a path with two turns | final displacement | error vs truth |
+`magi_launch/rviz/magi_odometry.rviz` uses `odom` as the fixed frame and the
+camera does not follow the robot, so drift is easy to see. It draws two trails:
+green is the EKF output (`/odometry/filtered`) and red is raw wheel odometry
+(`/wheel_controller/odom`). The red trail drifts off as soon as the robot turns.
+Over a test path with two turns:
+
+| Source | Final position | Error |
 |---|---|---|
-| ground truth | x +3.23, y +0.55 | — |
-| EKF (green) | x +2.47, y +2.01 | **1.65 m** |
-| wheel raw (red) | x +2.73, y +4.51 | **3.98 m** |
+| Ground truth | x +3.23, y +0.55 | - |
+| EKF (green) | x +2.47, y +2.01 | 1.65 m |
+| Wheel odometry (red) | x +2.73, y +4.51 | 3.98 m |
 
 ## Packages
 
 | Package | Contents |
 |---|---|
 | `magi_description` | URDF/xacro, meshes, `ros2_control` interfaces, Gazebo tags, RViz config |
-| `magi_gazebo` | Offline Rubicon world + vendored model, heightmap rebuild, flat test world |
-| `magi_control` | Controller YAML, spawners, stance/balance/posture nodes, teleop |
-| `magi_localization` | EKF + leg odometry + IMU conditioner; owns `odom -> base` |
-| `magi_slam` | RTAB-Map 3D lidar SLAM, the map saver, map-quality checks |
-| `magi_navigation` | Nav2 on a saved map: costmaps, planner, controller, behaviours |
+| `magi_gazebo` | Offline Rubicon world, heightmap rebuild, flat test world |
+| `magi_control` | Controller config, spawners, stance controllers, teleop |
+| `magi_localization` | EKF, leg odometry, IMU covariance node; publishes `odom -> base` |
+| `magi_slam` | RTAB-Map 3D lidar SLAM, map saver, map checks |
+| `magi_navigation` | Nav2 configuration and launch for a saved map |
 | `magi_bringup` | Simulation stack: world, robot, controllers, estimation |
-| `magi_launch` | Runnable configurations. Start here |
-| `third_party/gz_ros2_control` | Built from source — see below |
+| `magi_launch` | Top-level launch files (start here) |
+| `third_party/gz_ros2_control` | Built from source, see below |
 
-`src/unitree_go2w_ros2` and `src/Rubicon_World` are the original inputs, kept for
-reference. `unitree_go2w_ros2` carries a `COLCON_IGNORE` because its
-`go2w_driver` needs `unitree_sdk2`, which is for the physical robot.
+`src/unitree_go2w_ros2` and `src/Rubicon_World` are the original sources, kept
+for reference. `unitree_go2w_ros2` has a `COLCON_IGNORE` because its
+`go2w_driver` depends on `unitree_sdk2`, which is only for the real robot.
 
 ## Build
 
@@ -81,129 +86,150 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-**After a fresh clone, fetch the world.** It is not in the repo: 342 MB, with
-`rubicon.dae` alone well past GitHub's 100 MB per-file limit. The script
-downloads and verifies it, re-applies the terrain friction patch and **rebuilds
-the heightmap** ([why](#the-heightmap-is-a-staircase-and-it-is-rebuilt)):
+### Rubicon world
+
+The world assets are not in the repository (342 MB, and `rubicon.dae` alone is
+over GitHub's 100 MB file limit). After cloning, run:
 
 ```bash
 src/magi_gazebo/scripts/fetch_rubicon.sh   # ~187 MB download, once
 colcon build --symlink-install
 ```
 
-**SLAM needs RTAB-Map**, and a newer `diagnostic_updater` than Humble ships —
-the installed 4.0.6 lacks `libdiagnostic_updater.so`, which rtabmap 0.23.7 links
-against, and the node dies with exit 127 without it:
+The script downloads and verifies the model, adds terrain friction and rebuilds
+the heightmap (see [Heightmap rebuild](#heightmap-rebuild)).
+
+### RTAB-Map
 
 ```bash
 sudo apt install ros-humble-rtabmap-ros
 sudo apt install --only-upgrade ros-humble-diagnostic-updater
 ```
 
-**Why `gz_ros2_control` is built from source.** The Humble binary is compiled
-against Ignition Fortress and will not load in Gazebo Harmonic (`gz-sim8`). Its
-`humble` branch supports Harmonic when `GZ_VERSION=harmonic` is exported at
-build time, so it is vendored into `src/third_party/` and built that way. It
-installs its own `GZ_SIM_SYSTEM_PLUGIN_PATH` hook; sourcing the workspace is
-enough.
+`diagnostic_updater` 4.0.6 does not include `libdiagnostic_updater.so`, which
+rtabmap 0.23.7 needs. Without the upgrade the rtabmap node exits with code 127.
+
+### gz_ros2_control
+
+The Humble binary of `gz_ros2_control` is built for Ignition Fortress and does
+not load in Gazebo Harmonic. Its `humble` branch builds against Harmonic when
+`GZ_VERSION=harmonic` is set, so it is included in `src/third_party/` and built
+from source. Its environment hook sets `GZ_SIM_SYSTEM_PLUGIN_PATH`, so sourcing
+the workspace is enough.
 
 ---
 
 ## Sensors
 
-Modelled on the real Go2-W in
-[go2w_sensors.xacro](src/magi_description/urdf/go2w_sensors.xacro), bridged by
-[gz_bridge.yaml](src/magi_gazebo/config/gz_bridge.yaml).
+The sensors follow the real Go2-W specs. They are defined in
+[go2w_sensors.xacro](src/magi_description/urdf/go2w_sensors.xacro) and bridged
+to ROS in [gz_bridge.yaml](src/magi_gazebo/config/gz_bridge.yaml).
 
 | Real hardware | Simulated as | ROS topic | Rate |
 |---|---|---|---|
 | Livox MID-360 lidar | `gpu_lidar` | `/lidar/points`, `/lidar/scan` | 10 Hz |
-| Front HD wide-angle camera | `camera` 1280×720 | `/front_camera/image`, `/front_camera/camera_info` | 30 Hz |
-| Body IMU (6-axis + fusion) | `imu` + MEMS noise | `/imu/data_raw` | 200 Hz |
-| Foot force sensors ×4 | `force_torque` on each wheel joint | `/foot_force/{FL,FR,RL,RR}` | 200 Hz |
-| UWB positioning | not modelled | — | — |
-| **no GPS** | **deliberately absent** | — | — |
+| Front wide-angle camera | `camera` 1280x720 | `/front_camera/image`, `/front_camera/camera_info` | 30 Hz |
+| Body IMU (6-axis) | `imu` with noise | `/imu/data_raw` | 200 Hz |
+| Foot force sensors x4 | `force_torque` on each wheel joint | `/foot_force/{FL,FR,RL,RR}` | 200 Hz |
+| UWB positioning | not modeled | - | - |
+| GPS | none (the real robot has none) | - | - |
 
-Checked against the datasheets, not just "it publishes": exactly **23,040
-points** per scan (720 × 32 ≈ 200k points/s, the real MID-360 figure) over
-360° × −7…+52°, 0.1–40 m, σ = 2 cm; a **120.0°** camera FOV in the REP-103
-convention; an IMU reading 9.8203 m/s² level with the noise model visibly active;
-and foot forces that independently reproduce the load asymmetry in the calf
-torques. Three caveats:
+Checked against the datasheets:
 
-* **The lidar scan pattern is not authentic.** The MID-360 scans a
-  non-repetitive rosette; `gpu_lidar` only does a uniform raster. FOV, range,
-  rate and point budget are real, the sampling distribution is not — fine for
-  generic LIO, not for Livox-native SLAM keyed to scan lines.
-* **The camera is a pinhole, not a fisheye.** Unitree publishes no lens model.
-* **Foot wrenches are in the calf frame.** The child link is the wheel, spinning
-  at ~11.6 rad/s, so a child-frame wrench would rotate with it.
+- Lidar: 23,040 points per scan (720 x 32, about 200k points/s like the real
+  MID-360), 360° x (-7° to +52°), 0.1-40 m range, 2 cm noise.
+- Camera: 120° horizontal FOV, optical frame following REP-103.
+- IMU: reads 9.82 m/s² at rest, with the configured noise model active.
+- Foot forces: the load distribution matches the calf joint torques.
+
+Limitations:
+
+- The real MID-360 uses a non-repetitive rosette scan pattern. `gpu_lidar` only
+  supports a uniform raster, so FOV, range, rate and point count match but the
+  point distribution does not. This matters for Livox-specific SLAM packages,
+  not for general lidar SLAM.
+- The camera is a pinhole camera instead of a fisheye, because no lens model is
+  published for the real one.
+- Foot forces are reported in the calf frame. The wheel frame spins with the
+  wheel (about 11.6 rad/s while driving), so readings in that frame would rotate
+  too.
 
 ---
 
 ## State estimation
 
-A `robot_localization` EKF ([magi_localization](src/magi_localization/)) owns
-`odom → base`; `diff_drive_controller` runs with `enable_odom_tf: false` so there
-is exactly one publisher.
+A `robot_localization` EKF in [magi_localization](src/magi_localization/)
+publishes `odom -> base`. `diff_drive_controller` runs with
+`enable_odom_tf: false`, so the EKF is the only publisher of that transform.
 
-**The filter exists to fix heading.** The wheels are fixed and non-steerable, so
-every turn scrubs them sideways, and wheel odometry — which infers yaw from the
-wheel speed difference — cannot see the scrub:
+The main reason for the EKF is heading. The wheels cannot steer, so the robot
+slides them sideways in every turn, and wheel odometry (which computes yaw from
+the left/right speed difference) overestimates the rotation:
 
-| manoeuvre | ground truth | wheel odom | EKF |
+| Maneuver | Ground truth | Wheel odometry | EKF |
 |---|---|---|---|
-| spin 0.5 rad/s, 8.8 s | 118.1° | 197.6° (**+67%**) | 124.1° (**+5%**) |
-| arc 0.5 m/s + 0.4 rad/s, 7.1 s | 64.2° | 121.9° (**+90%**) | 60.2° (**−6%**) |
+| Spin 0.5 rad/s, 8.8 s | 118.1° | 197.6° (+67%) | 124.1° (+5%) |
+| Arc 0.5 m/s + 0.4 rad/s, 7.1 s | 64.2° | 121.9° (+90%) | 60.2° (-6%) |
 
-Wheel odometry contributes **vx only**. The IMU contributes roll/pitch and all
-three rates. Yaw is therefore integrated from the gyro with no absolute
-reference — exactly as on the real robot, whose IMU has no magnetometer — and
-drifts slowly, which is what `odom` is supposed to do; SLAM corrects it. `vy = 0`
-is *not* asserted: this is skid-steer, lateral slip is real, and the constraint
-would inject a lie.
+```bash
+ros2 run magi_localization magi_yaw_compare.py --angular 0.5 --duration 8
+```
 
-### The vertical channel comes from the legs, not the IMU
+Fused inputs:
 
-An accelerometer cannot supply `z`: fused alone, `az` gives the filter something
-to integrate and nothing to correct against, so the bias double-integrates.
-Measured with the robot **completely stationary**:
+- Wheel odometry: `vx` only.
+- IMU: roll, pitch, and all three angular rates.
 
-| | z after ~40 s |
+Yaw comes only from the gyro, as on the real robot (its IMU has no
+magnetometer), so it drifts slowly. SLAM corrects this in the `map` frame. `vy`
+is not fused as zero because the robot is skid-steered and really does slide
+sideways in turns.
+
+### Height from leg kinematics
+
+Fusing the accelerometer (`az`) without any height measurement makes `z` drift
+quickly, because the accelerometer bias gets integrated twice. With the robot
+standing still for about 40 s:
+
+| Inputs | z after ~40 s |
 |---|---|
-| IMU only | **−107.96 m** |
-| **+ leg kinematics** | **0.010 m** |
+| IMU only | -107.96 m |
+| IMU + leg kinematics | 0.010 m |
 
-The robot never moved; the IMU-only filter "fell" 108 m, its `vz` growing at
-0.0979 m/s² against the 0.1 m/s² accelerometer bias configured in the URDF.
+With the IMU alone, `vz` grew at 0.098 m/s², which matches the 0.1 m/s²
+accelerometer bias set in the URDF.
 
-`magi_leg_odometry` fixes it the way real quadruped estimators do. Each loaded
-wheel is a known point touching the surface, so body height above that surface
-is observable as `h = wheel_radius − (R · t_i).z`, with `R` built from roll and
-pitch only — the z component is invariant to yaw, which sidesteps the drifting
-heading. Measured: **0.3877 m** against a ground-truth 0.3963 m on rough terrain,
-and a commanded −0.123 m crouch read back as −0.123 m. It publishes
-`/magi/terrain_height`, `/magi/contacts` and `/magi/leg_twist` (fused as
-`twist0`).
+`magi_leg_odometry` provides the missing height measurement. For each wheel in
+contact (detected with the foot force sensors), body height above the ground is
+`h = wheel_radius - (R * t_i).z`, where `t_i` is the axle position from TF and
+`R` uses roll and pitch only (yaw does not change the z component). On rough
+terrain it measured 0.3877 m against a ground truth of 0.3963 m, and a
+commanded 0.123 m crouch was measured as 0.123 m.
 
-That `vz` is relative to the *terrain*: climbing a slope at constant ride height
-it reads zero while the robot rises, so `odom` cannot track absolute elevation.
-What it buys is a measured vertical channel whose error is a slow random walk
-rather than an unbounded quadratic divergence.
+| Topic | Content |
+|---|---|
+| `/magi/terrain_height` | Body height above the contact plane |
+| `/magi/contacts` | Which feet are in contact |
+| `/magi/leg_twist` | `vz`, fused by the EKF as `twist0` |
 
-**Why there is an IMU conditioner.** `gz.msgs.IMU` has no covariance fields, so
-the bridged `/imu/data_raw` carries all-zero covariances, which
-`robot_localization` reads as infinite confidence — collapsing the filter.
-`magi_imu_covariance` republishes it as `/imu/data` with the URDF's actual noise
-variances, and gives yaw a variance of 1e6 so nothing mistakes it for a heading.
+This height is relative to the ground under the robot, so `odom` z does not
+follow absolute elevation when driving up a slope. It does keep `z` bounded,
+which is what the filter needs.
+
+### IMU covariance
+
+`gz.msgs.IMU` has no covariance fields, so `/imu/data_raw` from the bridge has
+all covariances set to zero, which `robot_localization` treats as perfect
+measurements. `magi_imu_covariance` republishes it on `/imu/data` with the noise
+values from the URDF (gyro 4.0e-8, accel 2.89e-4) and sets a large yaw variance
+(1e6), since yaw is not actually measured.
 
 ---
 
 ## 3D SLAM
 
-RTAB-Map builds a 3D lidar map and publishes `map -> odom`
-([magi_slam](src/magi_slam/)), on top of the EKF's `odom -> base` — one owner per
-link.
+RTAB-Map ([magi_slam](src/magi_slam/)) builds a 3D map from the lidar and
+publishes `map -> odom`. The EKF still publishes `odom -> base`.
 
 ```bash
 ros2 launch magi_launch magi_test.launch.py slam:=true
@@ -211,327 +237,341 @@ ros2 launch magi_launch magi_test.launch.py slam:=true
 
 ![RTAB-Map mapping](docs/images/rtabMap_mapping.png)
 
-**No `icp_odometry`.** It would publish `odom -> base` and fight the EKF for it.
-RTAB-Map consumes `/odometry/filtered` instead and adds only the correction —
-full 6-DoF (`Reg/Force3DoF: false`), because EKF yaw drifts and odom z does not
-track the terrain's 5 m of relief, and both are what loop closure absorbs.
+Configuration notes:
 
-**Run one `rtabmap` at a time.** Two of them both publish `map -> odom`, and the
-symptom is not an error but a z flickering between two values.
+- RTAB-Map uses the EKF output (`/odometry/filtered`) as its odometry.
+  `icp_odometry` is not used because it would also publish `odom -> base`.
+- Registration is 6-DoF (`Reg/Force3DoF: false`). The terrain has about 5 m of
+  height difference, and odom z does not follow it.
+- Run only one `rtabmap` instance at a time. Two instances both publish
+  `map -> odom`, and the map frame then jumps between two positions.
 
-### Where z = 0 is, and why the map used to float
+### Map height
 
-RTAB-Map anchors `map` on the pose of its `frame_id` at the first keyframe. Point
-it at `base` and z = 0 lands at the body — a whole ride height off the floor.
-Invisible in the 3D cloud, glaring in the 2D one: a `nav_msgs/OccupancyGrid`
-always has `origin.position.z = 0`, so RViz drew `/map` as a plane 0.35 m in the
-air with the wheels hanging below it. The cloud itself was never wrong (ground
-returns within **0.03 m** of the true surface). Only the datum was.
+RTAB-Map places the `map` origin at the pose of its `frame_id` when the first
+keyframe is added. With `frame_id: base`, z = 0 of the map was at body height,
+about 0.35 m above the ground, and the 2D occupancy grid (always drawn at z = 0)
+showed up in RViz above the robot's wheels. The 3D cloud itself was correct:
+ground points were within 3 cm of the true terrain.
 
-Two independent fixes. `magi_leg_odometry` **sets the odom datum once** at
-startup, calling the EKF's `/set_pose` to move z = 0 down by the measured body
-height (`set_ground_datum:=false` reverts it). And RTAB-Map **anchors on
-`base_footprint`**, a rigid link 0.36 m below `base` — rigid rather than tracked,
-because a footprint that bobbed with ride height would push that bobbing into
-scan registration.
+This is fixed in two places:
 
-Standing, the 2D grid now sits within **1 mm** of the wheel contacts, with
-`map -> odom` z at 0.000. After nine metres of driving it is **38 mm** off:
-terrain-relative odom z drifting, for loop closure to absorb.
+- `magi_leg_odometry` sets the EKF's z once at startup (via `/set_pose`) after
+  the robot has settled, so z = 0 in `odom` is the ground. Disable with
+  `set_ground_datum:=false`.
+- RTAB-Map uses `base_footprint` as its `frame_id`: a fixed link 0.36 m below
+  `base`. It is fixed instead of following the measured ride height because SLAM
+  needs a frame that is rigidly attached to the robot.
 
-**Measured** over a 6 s segment across the basin:
+With both changes the grid is within 1 mm of the wheel contacts when standing,
+and 38 mm off after 9 m of driving (odom z drift, which loop closure corrects).
 
-| source | distance | error |
+### Accuracy
+
+Over a 6 s drive across the basin:
+
+| Source | Distance | Error |
 |---|---|---|
-| ground truth | 1.810 m | — |
-| **SLAM (`map -> base`)** | 1.846 m | **+0.036 m** |
-| EKF alone (`odom -> base`) | 2.198 m | +0.387 m |
+| Ground truth | 1.810 m | - |
+| SLAM (`map -> base`) | 1.846 m | +0.036 m |
+| EKF only (`odom -> base`) | 2.198 m | +0.387 m |
 
-Position error falls about tenfold. Yaw barely improves (−7.3° vs −8.1°), as
-expected: a short segment offers no loop closure, which is what corrects heading.
+SLAM reduces the position error about ten times. Yaw error barely changes on a
+run this short (-7.3° vs -8.1°) because there is no loop closure yet.
 
 ---
 
 ## Mapping and navigation
 
-![Autonomous navigation on the saved map](docs/images/auto_nav_1.png)
+![Navigation on the saved map](docs/images/auto_nav_1.png)
 
 ### Saving the map
 
-RTAB-Map streams its graph into a database as it maps, so quitting **is** the
-save. `slam.launch.py` points that database at its final home from the start —
-rather than copying it afterwards, which risks capturing a file rtabmap is still
-flushing. `magi_map_saver` runs alongside and writes what Nav2 needs. Ctrl-C is
-the whole procedure:
+RTAB-Map writes its database continuously while mapping, and the launch file
+points it directly at the final location, so stopping the launch saves the map.
+`magi_map_saver` runs alongside and, on Ctrl-C, exports the files Nav2 needs:
 
 ```
-~/magi_maps/rubicon.db      the RTAB-Map graph      -> relocalisation
-~/magi_maps/rubicon.yaml    the 2D grid, + .pgm     -> Nav2's static layer
-~/magi_maps/rubicon.ply     the 3D cloud            -> viewing
+~/magi_maps/rubicon.db      RTAB-Map database (used for localization)
+~/magi_maps/rubicon.yaml    2D occupancy grid (+ .pgm) for Nav2
+~/magi_maps/rubicon.ply     3D point cloud
 ```
 
-`map_name:=<name>` keeps several maps side by side; to snapshot mid-session,
-`ros2 service call /magi_map_saver/save std_srvs/srv/Trigger`.
+To save without stopping:
 
-Shutdown saving broke where the service worked. rclpy's SIGINT handler tears the
-context down from inside the handler, and the executor's next wait raises
-`RCLError` rather than the documented `ExternalShutdownException` — uncaught, so
-the map was silently never written. The node now declines rclpy's signal handling
-and treats shutdown as a flag its spin loop reads.
+```bash
+ros2 service call /magi_map_saver/save std_srvs/srv/Trigger
+```
 
-### Navigating
+The map saver handles SIGINT itself (`SignalHandlerOptions.NO`). With rclpy's
+default handler, Ctrl-C shut down the context while the executor was waiting,
+which raised an `RCLError` and the map was never written.
+
+### Managing maps
+
+By default every mapping run uses the name `rubicon`, so a new run replaces the
+previous map. The database is cleared when rtabmap starts (about 45 s after
+launch), not when you stop it, so even a short run that you quit right away
+removes the old map.
+
+```bash
+# New map under a different name (the rubicon map is left untouched)
+ros2 launch magi_launch magi_test.launch.py slam:=true map_name:=rubicon2
+ros2 launch magi_launch magi_nav.launch.py map_name:=rubicon2      # navigate on it
+
+# Extend the existing map instead of starting over
+ros2 launch magi_launch magi_test.launch.py slam:=true delete_db:=false
+
+# Back up the current maps before experimenting
+cp -a ~/magi_maps ~/magi_maps_backup_$(date +%F)
+```
+
+When extending a map, RTAB-Map only joins the new session to the old one after a
+loop closure, i.e. once it recognizes a place it has already mapped. Start from
+the usual spawn point and drive over mapped ground first; if the two sessions
+never connect, the result is two overlapping maps. Use `map_dir:=<path>` to
+store maps somewhere other than `~/magi_maps`.
+
+### Navigation
 
 ```bash
 ros2 launch magi_launch magi_nav.launch.py
 ```
 
-RTAB-Map in **localization** mode against the saved map, plus Nav2. Click **2D
-Goal Pose** in RViz and the robot plans and drives there.
+This starts RTAB-Map in localization mode on the saved map, plus Nav2 (map
+server, NavFn planner, Regulated Pure Pursuit controller, behavior tree
+navigator). Set a goal with 2D Goal Pose in RViz.
 
-* **No AMCL.** RTAB-Map owns `map -> odom`, localising against the graph that
-  built the map; a second publisher is exactly the silent-failure class this
-  repo keeps meeting. Respawning at the map origin brings `map -> odom` up at
-  4 cm. **2D Pose Estimate** relocalises RTAB-Map if it is ever lost.
-* **Regulated Pure Pursuit, not DWB.** DWB scores rollouts assuming the
-  commanded twist is executed — but `magi_stabilizer` sits between Nav2 and the
-  wheels, scaling commands for roughness and tipover margin. Pure pursuit
-  re-reads the pose every cycle, so a governed command just leaves the robot
-  further back along the path.
+- AMCL is not used. RTAB-Map localizes against the saved map and publishes
+  `map -> odom`. The robot spawns where the map was started, so the initial pose
+  is already correct (within about 4 cm). If localization is lost, use 2D Pose
+  Estimate in RViz, which RTAB-Map receives on `/initialpose`.
+- The controller is Regulated Pure Pursuit instead of DWB. `magi_stabilizer`
+  limits the velocity on rough ground, so the robot often moves slower than Nav2
+  asks. DWB scores trajectories assuming the command is followed exactly; Pure
+  Pursuit only tracks the path, so it copes with this better.
+- Teleop is off by default (`teleop:=true` to enable), because teleop and Nav2
+  both publish on `/cmd_vel`.
 
-### This lidar cannot see the ground, and it broke two things
+### Lidar ground coverage
 
-The MID-360 sits 0.46 m above the foot plane with its FOV starting at −7°, so it
-looks outward and up. Of the 23,040 returns in one scan on Rubicon, **1.6%** land
-within 0.3 m of the foot plane, and the nearest is **1.52 m** away.
+The MID-360 is mounted 0.46 m above the ground and its lowest beam points 7°
+down, so it sees very little ground near the robot. In one scan on Rubicon only
+1.6% of the 23,040 points were within 0.3 m of ground level, and the closest one
+was 1.52 m away. This caused two problems.
 
-**It made the occupancy grid unusable.** RTAB-Map marks a cell free only when a
-*ground point* lands in it, so almost nothing was free — including where the
-robot stood. `Grid/RayTracing: true` infers free space from the beams instead.
-Against the 88 poses the robot physically occupied on a 28 m run:
+**Occupancy grid.** By default RTAB-Map marks a cell free only when a ground
+point lands in it. With so few ground points, most cells came out occupied or
+unknown, including the ones the robot had driven over. `Grid/RayTracing: true`
+marks the cells along each beam as free instead. On a 28 m mapping run, checked
+at the 88 poses the robot actually drove through:
 
-| | ray tracing off | on |
+| | Ray tracing off | Ray tracing on |
 |---|---|---|
-| driven cells marked free | 51% | **100%** |
-| driven cells marked **occupied** | 34% | **0%** |
-| largest drivable region (0.38 m robot) | 1.4 m² | **364 m²** |
+| Driven cells marked free | 51% | 100% |
+| Driven cells marked occupied | 34% | 0% |
+| Largest drivable area (0.38 m robot radius) | 1.4 m² | 364 m² |
 
-The start cell was blocked in its own map, and no costmap tuning could have
-helped: the fault was upstream. Checked against the simulator's terrain, the old
-grid carried no information at all — "free" and "occupied" cells were the same
-ground, 72.8% vs 70.9% genuinely drivable. With ray tracing, occupied cells are
-real (90th-percentile true slope 51° against 33°). `Grid/RangeMax` is halved to
-10 m alongside, since ray tracing trusts beams that skim a rise, and longer beams
-skim more.
+Without ray tracing the robot's own start cell was blocked, so Nav2 could not
+plan at all. Compared with the real terrain, the old map's free and occupied
+cells were about equally drivable (72.8% vs 70.9%), so it did not contain useful
+information. With ray tracing, occupied cells line up with steeper terrain
+(90th percentile slope 51° vs 33° for free cells). `Grid/RangeMax` was also
+reduced from 20 m to 10 m, since long beams are more likely to pass over dips
+and mark them as free.
 
-**It rules out a live obstacle layer.** A costmap obstacle layer needs ground to
-decide what is *not* an obstacle and to raytrace free space open. Through
-`rtabmap_util/obstacles_detection`, every setting put 99%+ of the cloud in
-"obstacle":
+**Live obstacle layer.** Nav2's obstacle layer needs ground points to clear free
+space. Using `rtabmap_util/obstacles_detection`, almost the whole cloud was
+classified as obstacles with every setting tried:
 
-| settings | obstacle pts/scan | ground pts/scan |
+| Settings | Obstacle points/scan | Ground points/scan |
 |---|---|---|
-| noise filter 0.05 m (as first configured) | 5 | 0 |
-| no noise filter | 1379 | 0 |
+| Noise filter 0.05 m | 5 | 0 |
+| No noise filter | 1379 | 0 |
 | rtabmap defaults | 2615 | 0 |
-| height segmentation, ground below 0.3 m | 3263 | 224 |
+| Height segmentation, ground below 0.3 m | 3263 | 224 |
 
-Wired in, the robot walled itself in and froze — "collision ahead" on a cell the
-saved map called 100% free. Navigation runs on the SLAM map;
-`local_obstacles:=true` restores the live layer for anyone who changes the
-sensor. (The first row is its own trap: a noise-filter radius below the 0.1 m
-voxel size has no neighbours to count, so the node emitted empty clouds —
-silently.)
+With this layer enabled, the robot marked the terrain around itself as
+obstacles and stopped. It is disabled by default (`local_obstacles:=true` to
+enable), and Nav2 uses only the saved map. Note that
+`Grid/NoiseFilteringRadius` has to be larger than `Grid/CellSize`: with 0.05 m
+on a 0.1 m grid, every point was filtered out without any warning.
 
-### A 2D map cannot say "too steep", so the saver adds it
+### Slope layer
 
-With the grid fixed, Nav2 planned a clean path across ground correctly shown as
-empty, and the robot rolled over on it. An occupancy grid says *something is
-here*; it cannot say *this ground tilts 30°*. The information is in the 3D cloud,
-so `magi_map_saver` takes the lowest return per cell as ground, fits the local
-gradient over a footprint-sized window, and marks anything too steep as
-occupied.
+An occupancy grid has no notion of slope, and in testing Nav2 planned routes
+over steep ground where the robot then tipped over. `magi_map_saver` therefore
+adds a slope layer when it saves the map: it takes the lowest point in each cell
+of the 3D cloud as the ground height, computes the slope over a 1.5 m window,
+and marks cells above the limit as occupied.
 
-It is a rough estimate — correlation 0.54 with the true heightmap, since the
-lidar samples ground sparsely — so the threshold is **calibrated, not derived**:
-scored against the five places runs actually rolled the robot, and the poses it
-drove without falling.
+The estimate is rough (correlation 0.54 with the true terrain, since ground
+points are sparse), so the limit was tuned against five places where the robot
+rolled over during testing and against the path it drove without problems:
 
-| limit / window | occupied | driven path drivable | largest region | tip sites blocked |
+| Limit / window | Occupied | Driven path still drivable | Largest area | Tip-over spots blocked |
 |---|---|---|---|---|
-| none (`slope_layer:=false`) | 2.5% | 94.9% | 313 m² | **0 of 5** |
+| None (`slope_layer:=false`) | 2.5% | 94.9% | 313 m² | 0 of 5 |
 | 25° / 1.0 m | 29.2% | 67.9% | 66 m² | 5 of 5 |
-| **35° / 1.5 m** | 19.3% | 69.2% | **138 m²** | **4 of 5** |
+| 35° / 1.5 m (default) | 19.3% | 69.2% | 138 m² | 4 of 5 |
 | 40° / 1.5 m | 15.9% | 69.2% | 179 m² | 4 of 5 |
 
-Without the layer, *not one* site that rolled the robot is marked. 35° buys four
-of five for twice the area of the strictest setting. (35° is a smoothed estimate,
-not the ~25° the robot actually tips at; it is where it is because it scored
-best.)
+Without the slope layer none of the five spots are blocked. The default blocks
+four of them while keeping about twice the drivable area of the 25° setting.
+The 35° value is a tuned threshold for this smoothed estimate; the robot itself
+tips at around 25°.
 
-### Does it navigate?
+### Results
 
-![Navigating a goal across the basin](docs/images/auto_nav2.png)
+![Navigating a goal](docs/images/auto_nav2.png)
 
-Fourteen goals sent as `/goal_pose`, the way the RViz button sends them:
+14 goals were sent on `/goal_pose` (the same topic the RViz tool uses):
 
 | | |
 |---|---|
-| goals reached | **10 of 14** |
-| one uninterrupted sequence | **6 of 6**, robot upright at the end |
-| typical goal | 3–7 m, reached in 7–26 s |
-| planning / localisation failures | **0 / 0** |
+| Goals reached | 10 of 14 |
+| Longest run without failure | 6 of 6 goals, robot upright at the end |
+| Typical goal | 3-7 m, reached in 7-26 s |
+| Planning / localization failures | 0 / 0 |
 
-Every failure was the robot tipping or wedging on terrain, never the planner or
-the localiser.
+All four failures were the robot tipping over or getting stuck on terrain.
 
 ---
 
-## Control architecture
+## Control
 
-`gz_ros2_control` hosts the `controller_manager` inside Gazebo; the launch files
-only run spawners.
+`gz_ros2_control` runs the `controller_manager` inside Gazebo; the launch files
+only start the spawners.
 
 | Controller | Type | Joints |
 |---|---|---|
 | `joint_state_broadcaster` | JointStateBroadcaster | all 16 |
 | `imu_sensor_broadcaster` | IMUSensorBroadcaster | body IMU |
-| `leg_controller` | JointTrajectoryController | 12 leg joints, **effort** |
-| `wheel_controller` | DiffDriveController | 4 wheels, **velocity**, skid-steer |
+| `leg_controller` | JointTrajectoryController | 12 leg joints, effort |
+| `wheel_controller` | DiffDriveController | 4 wheels, velocity, skid-steer |
 
-Each joint declares exactly **one** command interface, because
-`GazeboSimSystem::write()` tests `VELOCITY` before `POSITION` before `EFFORT` and
-silently ignores all but the first.
+Each joint has only one command interface. `GazeboSimSystem::write()` checks
+velocity, then position, then effort, and only uses the first one it finds.
 
-**The legs are torque-controlled**, emitting
-`tau = p*(q_des − q) + i*∫ + d*(dq_des − dq)` — the law the real Unitree motor
-runs from its `MotorCmd`. Gains come from geometry: with the calf's 0.1535 m
-lever, `p = 200` gives ~8500 N/m at the wheel, ~5.7 mm of travel under the
-per-leg load, matched to the terrain's 6.8 mm mean facet step. Load sharing,
-before and after:
+The legs are effort controlled: `joint_trajectory_controller` computes
+`tau = p*(q_des - q) + i*integral + d*(dq_des - dq)`, the same control law the
+Unitree motors use (`MotorCmd`: q, dq, tau, kp, kd). With the calf's 0.1535 m
+lever, `p = 200` gives about 8500 N/m of stiffness at the wheel, or 5.7 mm of
+compression under the per-leg load, close to the terrain's 6.8 mm average step.
+Compared with position control, the load is shared much more evenly between the
+legs (calf effort on Rubicon):
 
-| calf effort on Rubicon | rigid position control | torque control |
+| Max/min spread | Position control | Effort control |
 |---|---|---|
-| max/min spread, standing | **201×** (FL effectively airborne) | **10.2×** |
-| max/min spread, driving | — | **3.3×** |
+| Standing | 201x (FL wheel barely touching) | 10.2x |
+| Driving | - | 3.3x |
 
-### Stance control and the command governor
-
-`magi_stabilizer` decides where the feet go; `magi_balance` (the original
-quasi-static controller) and `magi_posture` (one fixed stance) are kept for A/B:
+### Stance controller and velocity governor
 
 ```bash
-ros2 launch magi_launch magi_test.launch.py                            # stabilizer
-ros2 launch magi_launch magi_test.launch.py stance_controller:=balance # the old one
+ros2 launch magi_launch magi_test.launch.py                            # magi_stabilizer
+ros2 launch magi_launch magi_test.launch.py stance_controller:=balance # magi_balance
 ros2 launch magi_launch magi_test.launch.py balance:=false             # fixed stance
 ```
 
-The stabilizer **sits in the command path**. Teleop and Nav2 publish `/cmd_vel`;
-it republishes to `/wheel_controller/cmd_vel_unstamped` after projecting the
-twist onto the twists the robot can currently survive. A turn at `(v, w)` needs
-`v*w` of lateral acceleration, and the available amount is found by bisecting
-the measured stability margin, so the envelope shrinks by itself on a side slope,
-over a bump, or when a wheel unloads. Both components scale together, preserving
-`v/w` — the operator's arc, driven more slowly. Nothing else may publish to the
-wheel topic while it runs.
+`magi_stabilizer` is the default. `magi_balance` (the earlier controller) and
+`magi_posture` (fixed stance) are kept for comparison.
 
-Stability is a **force-angle margin**: how far the net force (effective gravity
-from the accelerometer, so centrifugal, braking and terrain terms included) can
-rotate before the robot goes over its worst support edge. Unlike "CoP inside the
-polygon" it stays defined on two wheels — the moment that matters — and reads in
-degrees of remaining tilt. On Rubicon, 8 s per run:
+`magi_stabilizer` also filters velocity commands. Teleop and Nav2 publish on
+`/cmd_vel`, and the stabilizer forwards them to
+`/wheel_controller/cmd_vel_unstamped` after limiting them to what the robot can
+currently handle. A turn at `(v, w)` needs `v*w` of lateral acceleration; the
+allowed value is found by searching the current stability margin, so it drops
+automatically on side slopes, over bumps, or when a wheel loses contact. `v` and
+`w` are scaled by the same factor, so the robot keeps the commanded turning
+radius and just drives it slower. Nothing else should publish to
+`/wheel_controller/cmd_vel_unstamped` while it runs.
 
-| profile | `magi_balance` | `magi_stabilizer` |
+Stability is measured as a force-angle margin: how far the total force (gravity
+plus accelerations, as measured by the accelerometer) can rotate before the
+robot tips over its weakest support edge. Unlike a "CoP inside the support
+polygon" test, it still works with only two wheels on the ground. On Rubicon,
+8 s runs:
+
+| Command | `magi_balance` | `magi_stabilizer` |
 |---|---|---|
-| v 0.7 | 2/3 upright, roll 45° | **3/3**, roll 11° |
-| v 1.2 | 0/3 upright, roll 137° | **8/8**, roll 9° |
-| v 0.9, w 0.5 | 1/3 upright, roll 99° | **3/3**, roll 11° |
-| v 1.5, w 1.2 | 1/3 upright, roll 85° | **7/8**, roll 12° |
-| **total** | **4/12** | **21/22** |
+| v 0.7 | 2/3 upright, roll 45° | 3/3, roll 11° |
+| v 1.2 | 0/3 upright, roll 137° | 8/8, roll 9° |
+| v 0.9, w 0.5 | 1/3 upright, roll 99° | 3/3, roll 11° |
+| v 1.5, w 1.2 | 1/3 upright, roll 85° | 7/8, roll 12° |
+| Total | 4/12 | 21/22 |
 
-Not a guarantee: there is no stepping, so a big enough terrain event still wins.
+There is no stepping, so a large enough terrain disturbance can still tip the
+robot over.
 
-#### Six faults that made it crawl
+### Stabilizer fixes
 
-The design above was right and the implementation was not. As shipped, the robot
-covered 1.07 m per 8 s run, splayed at its stance limit and refusing every
-command above a crawl. Each fault is documented at its site in
-`magi_stabilizer.py` / `.yaml`:
+The first working version of the stabilizer covered only 1.07 m per 8 s run on
+the terrain course, kept the legs fully spread and limited the speed almost
+everywhere. These problems were found and fixed (details are in the comments of
+`magi_stabilizer.py` and `magi_stabilizer.yaml`):
 
-| # | Fault | The measurement that found it |
+| # | Problem | Symptom |
 |---|---|---|
-| 1 | Attitude rate term fed to the legs unfiltered | A 19.5 Hz limit cycle standing still; accelerometer at **±200 m/s²** — 20 g on a stationary robot |
-| 2 | Effective gravity built as `-down*G`, pointing **up** | Every envelope probe failed; the governor ran on a hard-coded **0.8 m/s²** of the 10.0 available |
-| 3 | Terrain preview fit a **plane**, scoring hills as roughness | **57% of the map** read "fully rough", permanently. It fits a quadratic now |
-| 4 | Urgency pinned at 1.00 | Permanently splayed and throttled to 0.35 m/s — its top speed everywhere |
-| 5 | Widening triggered by ordinary speed | Track above 0.50 m for **98%** of a course; on flat ground, body 7 cm low |
-| 6 | The stance was friction-locked | Both front hips **pinned at −23.700 N·m**; the splay never moved at rest |
+| 1 | Unfiltered rate feedback in the attitude loop | 19.5 Hz oscillation while standing; accelerometer readings up to ±200 m/s² |
+| 2 | Sign error in the effective gravity vector (`-down*G`) | Stability envelope search always failed; lateral acceleration fixed at 0.8 m/s² instead of ~10 |
+| 3 | Terrain preview fitted a plane, so slopes counted as roughness | 57% of the map treated as rough; now uses a quadratic fit |
+| 4 | Urgency always at 1.0 | Legs always spread, speed capped at 0.35 m/s |
+| 5 | Stance widening triggered by normal driving speed | Track wider than 0.50 m for 98% of the course |
+| 6 | Stance changes attempted while stopped | Front hips saturated at 23.7 N·m; loaded wheels cannot slide sideways |
 
-**(1) was the one everything hung off.** Through the command horizon, the
-trajectory controller and the body's ~20 Hz mode on the hip PD there is 180° of
-phase well before 20 Hz, so undelayed rate feedback there is gain, not damping.
-Every consumer read the accelerometer it was shaking, and the stability margin
-reported **−32° on an upright robot**. Filtered, with `kd` at 0.05: **0.007
-rad/s rms**.
+- **1:** There is about 180° of phase lag below 20 Hz through the trajectory
+  controller and hip PD, so the unfiltered rate term amplified oscillations
+  instead of damping them. The shaking also corrupted the accelerometer data the
+  rest of the controller uses (the stability margin read -32° on an upright
+  robot). With filtering and `kd = 0.05`, body rates at rest are 0.007 rad/s rms.
+- **5:** Reducing `widen_max` from 0.110 to 0.070 actually increased the median
+  tip margin (31.3° to 35.6°), because at full spread the wheels tilt about 24°
+  and lose contact area. On flat ground at 0.97 m/s the track went from
+  0.554 m to 0.443 m and the ride height from 0.290 m to 0.346 m.
+- **6:** Sliding loaded wheels sideways needs about 17.3 N·m at the hip, on top
+  of ~12 N·m to hold the spread, against a 23.7 N·m limit. Stance changes now
+  only happen while the robot is rolling.
+- **Pitch guard (added):** the pitch tipping angle is `atan(0.1934/0.311)` =
+  31.9°, and widening the stance does not help with it. The robot flipped
+  backwards on steep faces, so `_govern` now limits commands based on pitch and
+  pitch rate.
 
-**(5) was a trade that wasn't one.** Narrowing `widen_max` from 0.110 to 0.070
-*raised* the median tip margin from 31.3° to **35.6°**: cambering the wheels 24°
-onto their rim edges cost more contact than the geometry bought. On flat ground
-at 0.97 m/s the track went from 0.554 m to **0.443 m** and ride height from
-0.290 m to **0.346 m**.
+### Startup
 
-**(6) makes the width lever one-way at rest.** Dragging four loaded wheels
-sideways costs 17.3 N·m at the hip on top of the ~12 N·m the splay holds, against
-a 23.7 N·m limit. Reshaping is now gated on rolling.
-
-And one guard was simply missing: **the pitch axis**. Its tipping angle,
-`atan(0.1934/0.311)` = **31.9°** nose-up, has no lever — widening is a roll
-remedy — and the robot drove onto steeper faces and went over backwards in three
-quarters of a second, with drive torque at 1.1 of 23.7 N·m: climbing something it
-should not have, not grinding. `_govern` now guards on pitch and pitch rate.
-
-### Startup and the limp-leg window
-
-Declaring an effort interface makes the legs torque-controlled from the moment
-the model appears
-([gz_system.cpp:476](src/third_party/gz_ros2_control/src/gz_system.cpp#L476)),
-so they are limp until `leg_controller` activates. **They recover:** the robot
-dips and the PD stands it back up, settling at the 0.396 m design stance on every
-launch measured.
-
-Two wrong turns are worth recording. A constant gravity-hold seed torque
-diverges — the stance is an *unstable* equilibrium — and with the signs wrong it
-drove every joint into a limit. That was misread as "the robot cannot recover",
-which led to a paused start; but activation itself needs physics ticks, so the
-unpause raced the controller switch and on a GUI run lost by two seconds.
-`paused:=true` remains available; the default is unpaused, simpler, and verified.
+With an effort interface, the legs have no torque until `leg_controller` is
+active ([gz_system.cpp:476](src/third_party/gz_ros2_control/src/gz_system.cpp#L476)),
+so the robot sags briefly after spawning. The PD controller then lifts it back
+to the 0.396 m stance. Two alternatives were tried and dropped: a constant
+gravity-compensation torque (the stance is unstable without feedback, so it
+diverged), and starting the simulation paused (controller activation needs
+simulation time, which caused a race). `paused:=true` is still available.
 
 ---
 
-## Measured behaviour
+## Mobility tests
 
-Ground truth from the Gazebo server. **Always use `--reps` on terrain:** the same
-start pose under an identical configuration has produced 2.7 m and 5.4 m, while
-flat ground repeats to sd 0.2 — the variance is terrain, not the harness.
+All results use Gazebo ground truth. Use `--reps` on terrain: the same start
+pose has given 2.7 m in one run and 5.4 m in the next, while flat ground varies
+by only 0.2 m (sd).
 
-`magi_terrain_trial.py` drives a twelve-leg course — nine start poses across
-Rubicon with footprint-scale slopes from 3° to 23°, plus arcs and a spin — and
-reports **net displacement**, because a robot shaking itself sideways racks up
-path without going anywhere. Three passes, 8 s per leg:
+`magi_terrain_trial.py` runs a 12-leg course: nine start poses across Rubicon
+(slopes 3° to 23°) plus two arcs and a spin. It reports net displacement rather
+than path length, since shaking in place adds path length without progress.
+Three passes, 8 s per leg:
 
-| | **net displacement** | path | upright at end |
+| Configuration | Net displacement | Path | Upright at end |
 |---|---|---|---|
-| before the fixes above | **1.07 m** | 1.54 m | 28/31 |
-| control fixes, 8-bit terrain | **1.52 m** | 1.81 m | 19/21 |
-| control fixes + rebuilt terrain | **3.23 m** | 3.68 m | 18/29 |
-| …at `ride_height` 0.36 (default) | **2.57 m** | 3.08 m | **9/11** |
+| Before the stabilizer fixes | 1.07 m | 1.54 m | 28/31 |
+| Stabilizer fixes, 8-bit terrain | 1.52 m | 1.81 m | 19/21 |
+| Stabilizer fixes, rebuilt terrain | 3.23 m | 3.68 m | 18/29 |
+| Same, `ride_height` 0.36 (default) | 2.57 m | 3.08 m | 9/11 |
 
-Three times the ground covered. The last row is the shipped default, trading
-twenty percent of distance for twenty points of upright rate (see
-`magi_stabilizer.yaml`). The honest reading of the upright column: the fixed
-robot rolls over more *per run* because it now reaches things — most rollovers
-were at the two start poses with a boulder within a metre, which the stock robot
-was too slow to arrive at. On flat ground it makes **0.98 m/s of a commanded
-1.00** with body rates of 0.007 rad/s rms.
+The default `ride_height` gives up some distance for a better upright rate (see
+`magi_stabilizer.yaml`; the last row is a single pass). Rollovers per run went
+up after the fixes because the robot now gets further, including to the two
+start poses with boulders within 1 m. On flat ground it reaches 0.98 m/s of a
+1.00 m/s command.
 
 ```bash
 ros2 run magi_control magi_terrain_trial.py --duration 8 --reps 3
@@ -539,135 +579,120 @@ ros2 run magi_control magi_drive_benchmark.py 1.0 0.0 3.5 --reps 8 \
     --reset-world rubicon --reset-pose 3.0,-0.5,1.85
 ```
 
-**Run one stance controller at a time.** A stray `magi_posture` alongside
-`magi_stabilizer` produces measurements that look like physics and are not — the
-robot apparently moving at 3.5% of command on flat ground, legs limp at exactly
-0.00 N·m, until the second publisher turned up.
+Notes:
 
-**The wheel collision shape dominates everything.** Upstream reuses the wheel's
-visual mesh as its collision geometry; swapping in the cylinder it describes
-(`gen_body.py`) changed behaviour more than any gain or friction value. With the
-mesh, a 0.8 rad/s spin splayed the legs and collapsed the body, saturating the
-hips at 23.7 N·m; with the cylinder, 1.5 rad/s is clean.
+- Run only one stance controller at a time. A leftover `magi_posture` process
+  next to `magi_stabilizer` sends conflicting leg commands, and the robot then
+  looks like it can barely move.
+- The wheel collision shape has a big effect. The upstream model uses the wheel
+  visual mesh for collision; `gen_body.py` replaces it with a cylinder. With the
+  mesh, spinning at 0.8 rad/s saturated the hips and collapsed the legs; with
+  the cylinder, 1.5 rad/s works fine.
 
 ---
 
 ## Known limitations
 
-**Navigation ends where the robot falls over.** All four missed goals were the
-robot tipping or wedging, and with no self-righting a fall ends the session —
-`base_footprint` lands somewhere meaningless and Nav2 reports collisions that are
-really a robot on its side. The slope layer blocks four of the five sites that
-caused this, but it is an estimate, not a guarantee. **Self-righting is the
-obvious next thing to build.**
+- **No self-righting.** Once the robot tips over it cannot recover, which ends
+  the navigation session. All four failed navigation goals were tip-overs or the
+  robot getting stuck. The slope layer helps (it blocks 4 of 5 known tip-over
+  spots) but does not prevent it completely.
+- **No live obstacle detection.** The lidar cannot see anything lower than about
+  0.4 m within 2.7 m of the robot, and the obstacle layer is disabled (see
+  [Lidar ground coverage](#lidar-ground-coverage)). Navigation relies on the
+  saved map, which works for this static world but not with moving obstacles.
+- **Turning.** With fixed wheels the robot gets about 78% of the commanded yaw
+  rate on flat ground and 47% on terrain, and wheel odometry overestimates yaw.
+  Raising `wheel_separation_multiplier` in `magi_controllers.yaml` makes turning
+  more responsive at the cost of odometry accuracy.
+- **Speed on terrain.** 0.6-0.8 m/s over Rubicon vs 0.98 m/s on flat ground,
+  because of the governor's roughness limit and about 24% wheel slip.
+- **Friction.** The robot can lift its front wheels if
+  `mu > half_wheelbase / h_com` = 0.62, but climbing needs `mu` = 1.0, which is
+  why there is a pitch guard. `mu` should also stay below about 1.23 so that
+  sideways wheel forces do not exceed the hip torque limit.
+- **Physics engine.** dartsim uses a single isotropic friction coefficient, so
+  `mu2` and `fdir1` have no effect. `bullet-featherstone` (`physics_engine:=`)
+  cannot load the Rubicon world and only works with `flat.sdf`.
 
-**Nothing sees an obstacle that is not in the map.** From 0.5 m up with a −7°
-lower FOV, the lidar's lowest ray reaches the ground only 2.69 m out, so anything
-under ~0.4 m inside that radius is invisible — against ~200 rock and stump
-colliders and 34 tree trunks. The world is static and mapped, so it costs nothing
-here and would cost everything around anything that moves. The proper fix is a
-traversability estimator, not a costmap parameter.
-
-**Turning is scrub-limited.** Yaw authority is ~78% on flat and ~47% on terrain,
-and wheel odometry over-reads yaw. Fuse the IMU before trusting heading; raise
-`wheel_separation_multiplier` for snappier turns at the cost of odometry.
-
-**Terrain costs about a third of the speed** — 0.6–0.8 m/s over Rubicon against
-0.98 on flat, from the governor's roughness ceiling and ~24% wheel slip. That is
-a fair price for the ground. Traction was never the binding constraint; the
-governor was, for the reasons above.
-
-**Friction is boxed in from both sides.** The no-wheelie condition is
-`mu < half_wheelbase / h_com` = **0.62**, while hill climbing needs `mu` = 1.0 —
-hence the rear-up guard rather than a speed limit. And `mu < 1.23` keeps a
-sideways-scrubbing wheel from pushing the hip past its torque limit.
-
-**Physics-engine caveats.** `dartsim` uses one isotropic friction coefficient, so
-`mu2`/`fdir1` do nothing. `bullet-featherstone` (`physics_engine:=`) cannot load
-Rubicon — the robot falls through the terrain — so it only works with
-`flat.sdf`.
-
-Tried and **did not** help, each re-measured with reps: wheel friction 1.0 vs
-1.4; mesh vs cylinder vs sphere wheel collision; position vs effort legs; command
-speed 0.2–1.0 m/s; dartsim's `bullet` collision detector (worse);
-`open_loop_control` on `leg_controller` (a 50 Hz roll oscillation on terrain).
-Tune on `world:=flat.sdf`, then confirm on terrain.
-
-One methodological note. The terrain rebuild below was once dismissed on a
-correct measurement — 72.8% vs 68.6%, inseparable from noise at n=8 — and a
-wrong conclusion. The stance controller was the binding constraint at the time,
-and **a fix to the second-largest problem does not show up while the largest is
-still there.** With the control faults repaired, the same rebuild is worth
-1.52 m → 3.23 m per run.
+Tried without improvement: wheel friction 1.4 instead of 1.0; mesh, cylinder and
+sphere wheel collision; position vs effort control on the legs; command speeds
+0.2-1.0 m/s; the `bullet` collision detector in dartsim (worse); and
+`open_loop_control` on `leg_controller` (50 Hz roll oscillation on terrain).
+Tune controllers on `world:=flat.sdf` first, then check on terrain.
 
 ---
 
-## The offline world
+## Offline world
 
-`magi_gazebo/worlds/rubicon.sdf` references `model://Rubicon`, vendored under
-`magi_gazebo/models/Rubicon` and put on `GZ_SIM_RESOURCE_PATH` by a colcon hook,
-so nothing touches the network at run time. `fetch_rubicon.sh` handles three
-things a plain download does not: the Fuel URL **truncates** (a straight `curl`
-stopped at 128 MB of 187), the heightmap collision declares **no friction** at
-all (an explicit `mu` of 1.5 took driving from 16% to 28% of command), and the
-heightmap itself is rebuilt.
+The world file uses `model://Rubicon` from `magi_gazebo/models/Rubicon`, which a
+colcon hook adds to `GZ_SIM_RESOURCE_PATH`, so nothing is downloaded at run time.
+`fetch_rubicon.sh`:
 
-### The heightmap is a staircase, and it is rebuilt
+- downloads with retry/resume and checks the archive with `unzip -t` (a plain
+  `curl` of the Fuel URL can stop early and leave a corrupt file),
+- adds a friction value (`mu` 1.5) to the heightmap collision, which has none
+  upstream (this raised driving speed from 16% to 28% of the command at the
+  time),
+- rebuilds the heightmap (below).
 
-`Heightmap.png` ships as **8-bit** greyscale over 5 m of relief, so one grey
-level is 19.6 mm and the terrain is a flight of stairs — ~2 cm risers every
-7.3 cm cell. The mean cell-to-cell step is **15.6 mm**: over most of the map, the
-relief the author drew is smaller than the format can represent.
+### Heightmap rebuild
 
-For an 86 mm wheel that matters. Mounting a step `h` with a wheel of radius `r`
-needs a tractive force of `sqrt(2rh − h²)/(r − h)`, which at 19.6 mm is **0.82**
-against a friction coefficient of 1.0. Every cell boundary is a near-stall, and
-every one cleared kicks the body — the bogging down and the rolling over, from
-one cause.
+The original `Heightmap.png` is 8-bit over 5 m of height, so each grey level is
+19.6 mm and the terrain surface is made of small steps. The average step between
+neighboring cells is 15.6 mm, about one level.
 
-[`rebuild_heightmap.py`](src/magi_gazebo/scripts/rebuild_heightmap.py) removes the
-staircase without changing the terrain. The true surface lies within half a grey
-level of each sample, so it smooths under exactly that constraint — Laplacian
-relaxation, clamped to `[h ± ½ level]` every pass — then resamples to 1025² and
-writes **16-bit**.
+For the 86 mm wheels this is significant: climbing a step of height `h` with
+wheel radius `r` needs a traction coefficient of `sqrt(2rh - h²)/(r - h)`, which
+is 0.82 at 19.6 mm (the friction coefficient is 1.0). The steps slow the robot
+down and cause the jolts that tip it over.
 
-| | resolution | mean step | slope p50 |
+[`rebuild_heightmap.py`](src/magi_gazebo/scripts/rebuild_heightmap.py) smooths
+out the steps while keeping every sample within half a grey level of its
+original value (Laplacian smoothing, clamped after each iteration), then
+upsamples to 1025x1025 and saves it as 16-bit:
+
+| | Resolution | Mean step | Median slope |
 |---|---|---|---|
-| shipped, 8-bit | 513² (7.3 cm cells) | 15.6 mm | 15.0° |
-| rebuilt, 16-bit | 1025² (3.7 cm cells) | **6.7 mm** | **11.6°** |
+| Original, 8-bit | 513² (7.3 cm cells) | 15.6 mm | 15.0° |
+| Rebuilt, 16-bit | 1025² (3.7 cm cells) | 6.7 mm | 11.6° |
 
-No sample moves more than **9.8 mm**, so every rock and tree stays where it was
-placed; the slope falls because most of that 15° was staircase, not hill. The
-original PNG is kept and only `model.sdf` is repointed, so reverting is one line.
+No sample moves more than 9.8 mm, so objects placed on the terrain stay where
+they were. The original PNG is kept and only `model.sdf` points to the new file.
+On the mobility course this raised net displacement from 1.52 m to 3.23 m per
+leg.
 
 ---
 
-## Description notes
+## Model notes
 
-`go2w_body.xacro` is generated from the upstream URDF by
-`magi_description/scripts/gen_body.py` (re-run it if upstream changes). It
-repoints mesh URIs, collapses upstream's illegal sibling `<material>` tags, and
-swaps the wheel **collision** mesh for the cylinder it describes (r 0.086,
-w 0.0518). Kinematics, inertials and visual meshes are untouched.
+- `go2w_body.xacro` is generated from the upstream URDF by
+  `magi_description/scripts/gen_body.py`. It updates the mesh paths, removes
+  duplicate `<material>` tags, and replaces the wheel collision mesh with a
+  cylinder (r 0.086 m, width 0.0518 m). Kinematics, inertia and visuals are
+  unchanged.
+- `mid-360.dae` crashed the Gazebo GUI when the robot spawned. The file uses the
+  same `offset` for VERTEX and NORMAL, which is valid COLLADA but not handled by
+  gz-common5's loader (it reads past the end of the index array). The headless
+  server does not load visual meshes, so only the GUI was affected.
+  `fix_collada_offsets.py` rewrites the file and has already been applied to
+  the included meshes:
 
-**The Livox mesh crashed the Gazebo GUI.** `mid-360.dae` declares VERTEX and
-NORMAL at the same `offset`, which is legal COLLADA, but gz-common5's loader
-strides indices by the number of inputs, runs off the end of the array and
-segfaults — killing the GUI the moment the robot spawned, and never the headless
-server, which does not load visuals. `fix_collada_offsets.py` rewrites such
-primitives (already applied to the vendored meshes):
+  ```bash
+  python3 src/magi_description/scripts/fix_collada_offsets.py src/magi_description/meshes/*.dae
+  ```
 
-```bash
-python3 src/magi_description/scripts/fix_collada_offsets.py src/magi_description/meshes/*.dae
-```
+## Troubleshooting
 
-**If RViz dies with `undefined symbol: __libc_pthread_init`**, you are launching
-from a snap-packaged terminal (VS Code's integrated one is the usual case), which
-leaks `GTK_PATH` / `LOCPATH` into the snap runtime. The launch files blank those
-variables for RViz when they point into `/snap`; running `rviz2` by hand, prefix
-it with `GTK_PATH= LOCPATH= GIO_MODULE_DIR=`.
+- **`package 'rtabmap_slam' not found`:** install RTAB-Map (see
+  [Build](#rtab-map)).
+- **RViz fails with `undefined symbol: __libc_pthread_init`:** this happens when
+  launching from a snap-packaged terminal such as VS Code's, which sets
+  `GTK_PATH`/`LOCPATH` to snap paths. The launch files clear these for RViz.
+  When running `rviz2` by hand, prefix it with
+  `GTK_PATH= LOCPATH= GIO_MODULE_DIR=`.
 
-Useful checks:
+Useful commands:
 
 ```bash
 ros2 launch magi_description display.launch.py     # RViz + joint sliders, no Gazebo
